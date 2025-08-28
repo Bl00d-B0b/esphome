@@ -20,6 +20,7 @@
 
 #ifdef USE_ESP32
 
+#include <esp_bt.h>
 #include <esp_gap_ble_api.h>
 #include <esp_gattc_api.h>
 #include <esp_gatts_api.h>
@@ -94,6 +95,7 @@ class BLEStatusEventHandler {
 class ESP32BLE : public Component {
  public:
   void set_io_capability(IoCapability io_capability) { this->io_cap_ = (esp_ble_io_cap_t) io_capability; }
+  void set_tx_power(esp_power_level_t tx_power) { this->tx_power_ = tx_power; }
 
   void set_advertising_cycle_time(uint32_t advertising_cycle_time) {
     this->advertising_cycle_time_ = advertising_cycle_time;
@@ -172,6 +174,7 @@ class ESP32BLE : public Component {
   // 1-byte aligned members (grouped together to minimize padding)
   BLEComponentState state_{BLE_COMPONENT_STATE_OFF};  // 1 byte (uint8_t enum)
   bool enable_on_boot_{};                             // 1 byte
+  esp_power_level_t tx_power_{ESP_PWR_LVL_P9};        // 1 byte (default: +9 dBm)
 };
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)

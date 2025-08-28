@@ -212,6 +212,15 @@ bool ESP32BLE::ble_setup_() {
     return false;
   }
 
+  // Set TX power for all BLE operations (advertising, scanning, connections)
+  err = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, this->tx_power_);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "esp_ble_tx_power_set failed: %s", esp_err_to_name(err));
+    // Continue anyway as this is not critical
+  } else {
+    ESP_LOGD(TAG, "BLE TX power set to level %d", this->tx_power_);
+  }
+
   // BLE takes some time to be fully set up, 200ms should be more than enough
   delay(200);  // NOLINT
 
@@ -520,11 +529,106 @@ void ESP32BLE::dump_config() {
         io_capability_s = "invalid";
         break;
     }
+    // Convert TX power level to dBm for display
+    int tx_power_dbm = 0;
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    // ESP32 classic power levels (0-7)
+    switch (this->tx_power_) {
+      case 0:
+        tx_power_dbm = -12;
+        break;  // ESP_PWR_LVL_N12
+      case 1:
+        tx_power_dbm = -9;
+        break;  // ESP_PWR_LVL_N9
+      case 2:
+        tx_power_dbm = -6;
+        break;  // ESP_PWR_LVL_N6
+      case 3:
+        tx_power_dbm = -3;
+        break;  // ESP_PWR_LVL_N3
+      case 4:
+        tx_power_dbm = 0;
+        break;  // ESP_PWR_LVL_N0
+      case 5:
+        tx_power_dbm = 3;
+        break;  // ESP_PWR_LVL_P3
+      case 6:
+        tx_power_dbm = 6;
+        break;  // ESP_PWR_LVL_P6
+      case 7:
+        tx_power_dbm = 9;
+        break;  // ESP_PWR_LVL_P9
+      default:
+        tx_power_dbm = 0;
+        break;
+    }
+#elif defined(CONFIG_IDF_TARGET_ESP32C2) || defined(CONFIG_IDF_TARGET_ESP32C3) || \
+    defined(CONFIG_IDF_TARGET_ESP32C5) || defined(CONFIG_IDF_TARGET_ESP32C6) || defined(CONFIG_IDF_TARGET_ESP32H2) || \
+    defined(CONFIG_IDF_TARGET_ESP32S3)
+    // Extended power levels for C2/C3/C5/C6/H2/S3 (0-15)
+    switch (this->tx_power_) {
+      case 0:
+        tx_power_dbm = -24;
+        break;  // ESP_PWR_LVL_N24
+      case 1:
+        tx_power_dbm = -21;
+        break;  // ESP_PWR_LVL_N21
+      case 2:
+        tx_power_dbm = -18;
+        break;  // ESP_PWR_LVL_N18
+      case 3:
+        tx_power_dbm = -15;
+        break;  // ESP_PWR_LVL_N15
+      case 4:
+        tx_power_dbm = -12;
+        break;  // ESP_PWR_LVL_N12
+      case 5:
+        tx_power_dbm = -9;
+        break;  // ESP_PWR_LVL_N9
+      case 6:
+        tx_power_dbm = -6;
+        break;  // ESP_PWR_LVL_N6
+      case 7:
+        tx_power_dbm = -3;
+        break;  // ESP_PWR_LVL_N3
+      case 8:
+        tx_power_dbm = 0;
+        break;  // ESP_PWR_LVL_N0
+      case 9:
+        tx_power_dbm = 3;
+        break;  // ESP_PWR_LVL_P3
+      case 10:
+        tx_power_dbm = 6;
+        break;  // ESP_PWR_LVL_P6
+      case 11:
+        tx_power_dbm = 9;
+        break;  // ESP_PWR_LVL_P9
+      case 12:
+        tx_power_dbm = 12;
+        break;  // ESP_PWR_LVL_P12
+      case 13:
+        tx_power_dbm = 15;
+        break;  // ESP_PWR_LVL_P15
+      case 14:
+        tx_power_dbm = 18;
+        break;  // ESP_PWR_LVL_P18
+      case 15:
+        tx_power_dbm = 20;
+        break;  // ESP_PWR_LVL_P20
+      default:
+        tx_power_dbm = 0;
+        break;
+    }
+#else
+    // Unknown variant
+    tx_power_dbm = 0;
+#endif
     ESP_LOGCONFIG(TAG,
                   "BLE:\n"
                   "  MAC address: %s\n"
-                  "  IO Capability: %s",
-                  format_mac_address_pretty(mac_address).c_str(), io_capability_s);
+                  "  IO Capability: %s\n"
+                  "  TX Power: %d dBm",
+                  format_mac_address_pretty(mac_address).c_str(), io_capability_s, tx_power_dbm);
   } else {
     ESP_LOGCONFIG(TAG, "Bluetooth stack is not enabled");
   }

@@ -3,7 +3,17 @@ import re
 
 from esphome import automation
 import esphome.codegen as cg
-from esphome.components.esp32 import add_idf_sdkconfig_option, const, get_esp32_variant
+from esphome.components.esp32 import (
+    VARIANT_ESP32C2,
+    VARIANT_ESP32C3,
+    VARIANT_ESP32C5,
+    VARIANT_ESP32C6,
+    VARIANT_ESP32H2,
+    VARIANT_ESP32S3,
+    add_idf_sdkconfig_option,
+    const,
+    get_esp32_variant,
+)
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ENABLE_ON_BOOT,
@@ -11,8 +21,10 @@ from esphome.const import (
     CONF_ID,
     CONF_NAME,
     CONF_NAME_ADD_MAC_SUFFIX,
+    CONF_TX_POWER,
 )
 from esphome.core import CORE, TimePeriod
+from esphome.cpp_types import MockObj
 import esphome.final_validate as fv
 
 DEPENDENCIES = ["esp32"]
@@ -151,7 +163,8 @@ IO_CAPABILITY = {
 
 esp_power_level_t = cg.global_ns.enum("esp_power_level_t")
 
-TX_POWER_LEVELS = {
+# Power level mappings for code generation - ESP32 classic
+TX_POWER_LEVELS_ESP32 = {
     -12: esp_power_level_t.ESP_PWR_LVL_N12,
     -9: esp_power_level_t.ESP_PWR_LVL_N9,
     -6: esp_power_level_t.ESP_PWR_LVL_N6,
@@ -162,6 +175,53 @@ TX_POWER_LEVELS = {
     9: esp_power_level_t.ESP_PWR_LVL_P9,
 }
 
+# Power level mappings for code generation - Extended variants
+TX_POWER_LEVELS_EXT = {
+    -24: esp_power_level_t.ESP_PWR_LVL_N24,
+    -21: esp_power_level_t.ESP_PWR_LVL_N21,
+    -18: esp_power_level_t.ESP_PWR_LVL_N18,
+    -15: esp_power_level_t.ESP_PWR_LVL_N15,
+    -12: esp_power_level_t.ESP_PWR_LVL_N12,
+    -9: esp_power_level_t.ESP_PWR_LVL_N9,
+    -6: esp_power_level_t.ESP_PWR_LVL_N6,
+    -3: esp_power_level_t.ESP_PWR_LVL_N3,
+    0: esp_power_level_t.ESP_PWR_LVL_N0,
+    3: esp_power_level_t.ESP_PWR_LVL_P3,
+    6: esp_power_level_t.ESP_PWR_LVL_P6,
+    9: esp_power_level_t.ESP_PWR_LVL_P9,
+    12: esp_power_level_t.ESP_PWR_LVL_P12,
+    15: esp_power_level_t.ESP_PWR_LVL_P15,
+    18: esp_power_level_t.ESP_PWR_LVL_P18,
+    20: esp_power_level_t.ESP_PWR_LVL_P20,
+}
+
+
+def _get_tx_power_levels() -> dict[str, MockObj]:
+    variant = get_esp32_variant()
+    if variant in [
+        VARIANT_ESP32C2,
+        VARIANT_ESP32C3,
+        VARIANT_ESP32C5,
+        VARIANT_ESP32C6,
+        VARIANT_ESP32H2,
+        VARIANT_ESP32S3,
+    ]:
+        return TX_POWER_LEVELS_EXT
+    return TX_POWER_LEVELS_ESP32
+
+
+def validate_tx_power(value: int) -> int:
+    value = cv.decibel(value)
+    power_levels = _get_tx_power_levels()
+    if value not in power_levels:
+        raise cv.Invalid(
+            f"TX power {value}dBm is not valid. "
+            f"Valid values are: {', '.join(str(v) + 'dBm' for v in sorted(power_levels.keys()))}"
+        )
+    # Return just the dBm value, we'll map it to enum in to_code
+    return value
+
+
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(ESP32BLE),
@@ -169,6 +229,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_IO_CAPABILITY, default="none"): cv.enum(
             IO_CAPABILITY, lower=True
         ),
+        cv.Optional(CONF_TX_POWER): validate_tx_power,
         cv.Optional(CONF_ENABLE_ON_BOOT, default=True): cv.boolean,
         cv.Optional(CONF_ADVERTISING, default=False): cv.boolean,
         cv.Optional(
@@ -259,6 +320,9 @@ async def to_code(config):
     cg.add(var.set_advertising_cycle_time(config[CONF_ADVERTISING_CYCLE_TIME]))
     if (name := config.get(CONF_NAME)) is not None:
         cg.add(var.set_name(name))
+    if (tx_power := config.get(CONF_TX_POWER)) is not None:
+        # The validation already returned the enum value
+        cg.add(var.set_tx_power(_get_tx_power_levels()[tx_power]))
     await cg.register_component(var, config)
 
     if CORE.using_esp_idf:
