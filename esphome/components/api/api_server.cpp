@@ -404,17 +404,17 @@ void APIServer::send_homeassistant_action(const HomeassistantActionRequest &call
   }
 }
 
+#ifdef USE_API_HOMEASSISTANT_ACTION_RESPONSES
 void APIServer::register_action_response_callback(uint32_t call_id, ActionResponseCallback callback) {
   this->action_response_callbacks_[call_id] = std::move(callback);
 }
 
 void APIServer::handle_action_response(uint32_t call_id, bool success, const std::string &error_message,
-                                       const std::string &response_data) {
+                                       const char *response_data, size_t response_data_len) {
   auto it = this->action_response_callbacks_.find(call_id);
   if (it != this->action_response_callbacks_.end()) {
     // Create the response object
-    auto response = std::make_shared<class ActionResponse>(success, error_message);
-    response->set_data(response_data);
+    auto response = std::make_shared<class ActionResponse>(success, error_message, response_data, response_data_len);
 
     // Call the callback
     it->second(response);
@@ -423,6 +423,7 @@ void APIServer::handle_action_response(uint32_t call_id, bool success, const std
     this->action_response_callbacks_.erase(it);
   }
 }
+#endif
 #endif
 
 #ifdef USE_API_HOMEASSISTANT_STATES

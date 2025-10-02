@@ -1550,9 +1550,10 @@ void APIConnection::execute_service(const ExecuteServiceRequest &msg) {
 }
 #endif
 
-#ifdef USE_API_HOMEASSISTANT_SERVICES
+#if defined(USE_API_HOMEASSISTANT_SERVICES) && defined(USE_API_HOMEASSISTANT_ACTION_RESPONSES)
 void APIConnection::on_homeassistant_action_response(const HomeassistantActionResponse &msg) {
-  this->parent_->handle_action_response(msg.call_id, msg.success, msg.error_message, msg.response_data);
+  this->parent_->handle_action_response(msg.call_id, msg.success, msg.error_message,
+                                        reinterpret_cast<const char *>(msg.response_data), msg.response_data_len);
 };
 #endif
 #ifdef USE_API_NOISE

@@ -896,6 +896,8 @@ void HomeassistantActionRequest::calculate_size(ProtoSize &size) const {
   size.add_uint32(1, this->call_id);
   size.add_length(1, this->response_template.size());
 }
+#endif
+#ifdef USE_API_HOMEASSISTANT_ACTION_RESPONSES
 bool HomeassistantActionResponse::decode_varint(uint32_t field_id, ProtoVarInt value) {
   switch (field_id) {
     case 1:
@@ -914,9 +916,12 @@ bool HomeassistantActionResponse::decode_length(uint32_t field_id, ProtoLengthDe
     case 3:
       this->error_message = value.as_string();
       break;
-    case 4:
-      this->response_data = value.as_string();
+    case 4: {
+      // Use raw data directly to avoid allocation
+      this->response_data = value.data();
+      this->response_data_len = value.size();
       break;
+    }
     default:
       return false;
   }

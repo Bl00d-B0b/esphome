@@ -47,35 +47,36 @@ template<typename... Ts> class TemplatableKeyValuePair {
   TemplatableStringValue<Ts...> value;
 };
 
+#ifdef USE_API_HOMEASSISTANT_ACTION_RESPONSES
 // Represents the response data from a Home Assistant action
 class ActionResponse {
  public:
-  ActionResponse(bool success, std::string error_message = "")
-      : success_(success), error_message_(std::move(error_message)) {}
+  ActionResponse(bool success, std::string error_message, const char *data, size_t data_len)
+      : success_(success), error_message_(std::move(error_message)), data_(data), data_len_(data_len) {}
 
   bool is_success() const { return this->success_; }
   const std::string &get_error_message() const { return this->error_message_; }
-  const std::string &get_data() const { return this->data_; }
+  const char *get_data() const { return this->data_; }
+  size_t get_data_len() const { return this->data_len_; }
   // Get data as parsed JSON object
   // Returns unbound JsonObject if data is empty or invalid JSON
   JsonObject get_json() {
-    if (this->data_.empty())
+    if (this->data_len_ == 0)
       return JsonObject();  // Return unbound JsonObject if no data
 
     if (!this->parsed_json_) {
-      this->json_document_ = json::parse_json(this->data_);
+      this->json_document_ = json::parse_json(this->data_, this->data_len_);
       this->json_ = this->json_document_.as<JsonObject>();
       this->parsed_json_ = true;
     }
     return this->json_;
   }
 
-  void set_data(const std::string &data) { this->data_ = data; }
-
  protected:
   bool success_;
   std::string error_message_;
-  std::string data_;
+  const char *data_;
+  size_t data_len_;
   JsonDocument json_document_;
   JsonObject json_;
   bool parsed_json_{false};
@@ -83,6 +84,7 @@ class ActionResponse {
 
 // Callback type for action responses
 template<typename... Ts> using ActionResponseCallback = std::function<void(std::shared_ptr<ActionResponse>, Ts...)>;
+#endif
 
 template<typename... Ts> class HomeAssistantServiceCallAction : public Action<Ts...> {
  public:
@@ -101,6 +103,7 @@ template<typename... Ts> class HomeAssistantServiceCallAction : public Action<Ts
     this->variables_.emplace_back(std::move(key), value);
   }
 
+#ifdef USE_API_HOMEASSISTANT_ACTION_RESPONSES
   template<typename T> void set_response_template(T response_template) {
     this->response_template_ = response_template;
     this->has_response_template_ = true;
@@ -110,6 +113,7 @@ template<typename... Ts> class HomeAssistantServiceCallAction : public Action<Ts
     this->wants_response_ = true;
     this->response_callback_ = callback;
   }
+#endif
 
   void play(Ts... x) override {
     HomeassistantActionRequest resp;
@@ -135,6 +139,7 @@ template<typename... Ts> class HomeAssistantServiceCallAction : public Action<Ts
       kv.value = it.value.value(x...);
     }
 
+#ifdef USE_API_HOMEASSISTANT_ACTION_RESPONSES
     if (this->wants_response_) {
       // Generate a unique call ID for this service call
       static uint32_t call_id_counter = 1;
@@ -152,6 +157,7 @@ template<typename... Ts> class HomeAssistantServiceCallAction : public Action<Ts
         std::apply([this, &response](auto &&...args) { this->response_callback_(response, args...); }, captured_args);
       });
     }
+#endif
 
     this->parent_->send_homeassistant_action(resp);
   }
@@ -163,12 +169,15 @@ template<typename... Ts> class HomeAssistantServiceCallAction : public Action<Ts
   std::vector<TemplatableKeyValuePair<Ts...>> data_;
   std::vector<TemplatableKeyValuePair<Ts...>> data_template_;
   std::vector<TemplatableKeyValuePair<Ts...>> variables_;
+#ifdef USE_API_HOMEASSISTANT_ACTION_RESPONSES
   TemplatableStringValue<Ts...> response_template_{""};
   ActionResponseCallback<Ts...> response_callback_;
   bool wants_response_{false};
   bool has_response_template_{false};
+#endif
 };
 
+#ifdef USE_API_HOMEASSISTANT_ACTION_RESPONSES
 template<typename... Ts>
 class HomeAssistantActionResponseTrigger : public Trigger<std::shared_ptr<ActionResponse>, Ts...> {
  public:
@@ -177,6 +186,7 @@ class HomeAssistantActionResponseTrigger : public Trigger<std::shared_ptr<Action
         [this](std::shared_ptr<ActionResponse> response, Ts... x) { this->trigger(response, x...); });
   }
 };
+#endif
 
 }  // namespace esphome::api
 #endif

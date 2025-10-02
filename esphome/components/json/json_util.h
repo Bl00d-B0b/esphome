@@ -51,6 +51,8 @@ std::string build_json(const json_build_t &f);
 bool parse_json(const std::string &data, const json_parse_t &f);
 /// Parse a JSON string and return the root JsonDocument (or an unbound object on error)
 JsonDocument parse_json(const std::string &data);
+/// Parse JSON from a buffer and return the root JsonDocument (or an unbound object on error)
+JsonDocument parse_json(const char *data, size_t len);
 
 /// Builder class for creating JSON documents without lambdas
 class JsonBuilder {
