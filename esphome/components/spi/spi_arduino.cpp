@@ -3,7 +3,7 @@
 
 namespace esphome {
 namespace spi {
-#ifdef USE_ARDUINO
+#if defined(USE_ARDUINO) && !defined(USE_ESP32)
 
 static const char *const TAG = "spi-esp-arduino";
 class SPIDelegateHw : public SPIDelegate {
@@ -73,9 +73,6 @@ class SPIBusHw : public SPIBus {
     channel->pins(Utility::get_pin_no(clk), Utility::get_pin_no(sdi), Utility::get_pin_no(sdo), -1);
     channel->begin();
 #endif  // USE_ESP8266
-#ifdef USE_ESP32
-    channel->begin(Utility::get_pin_no(clk), Utility::get_pin_no(sdi), Utility::get_pin_no(sdo), -1);
-#endif
 #ifdef USE_RP2040
     if (Utility::get_pin_no(sdi) != -1)
       channel->setRX(Utility::get_pin_no(sdi));

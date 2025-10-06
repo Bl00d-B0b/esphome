@@ -1,6 +1,16 @@
-substitutions:
-  clk_pin: GPIO6
-  mosi_pin: GPIO7
-  miso_pin: GPIO5
-
-<<: !include common.yaml
+spi:
+  - id: quad_spi
+    type: quad
+    interface: hardware
+    clk_pin:
+      number: 6
+    data_pins:
+      - 7
+      - 2
+      - 10
+      - allow_other_uses: true
+        number: 3
+  - id: spi_id_2
+    interface: any
+    clk_pin: 4
+    mosi_pin: 5
