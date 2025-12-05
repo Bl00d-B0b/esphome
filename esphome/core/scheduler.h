@@ -13,6 +13,43 @@
 
 namespace esphome {
 
+// 48-bit timestamp for scheduler operations.
+// Uses 32-bit math with manual carry detection to avoid expensive 64-bit
+// emulation on ESP8266 and other 32-bit platforms without native 64-bit support.
+struct Time48 {
+  uint32_t millis{0};  // Low 32 bits - milliseconds within current epoch
+  uint16_t major{0};   // High 16 bits - rollover counter (~49.7 days each)
+
+  constexpr Time48() = default;
+  constexpr Time48(uint32_t millis, uint16_t major) : millis(millis), major(major) {}
+
+  // Add a 32-bit offset (delay/interval)
+  constexpr Time48 operator+(uint32_t offset) const {
+    uint32_t new_millis = millis + offset;
+    uint16_t new_major = major;
+    if (new_millis < millis)
+      new_major++;  // Overflow occurred
+    return {new_millis, new_major};
+  }
+
+  // Compare operators - manual implementation to avoid <compare> header overhead
+  constexpr bool operator<(const Time48 &other) const {
+    return (major != other.major) ? (major < other.major) : (millis < other.millis);
+  }
+  constexpr bool operator>(const Time48 &other) const { return other < *this; }
+  constexpr bool operator<=(const Time48 &other) const { return !(other < *this); }
+  constexpr bool operator>=(const Time48 &other) const { return !(*this < other); }
+
+  // Subtract two Time48 values, returning 32-bit result
+  // PRECONDITION: *this >= other AND difference fits in 32 bits
+  // This is always true for scheduler since max delay is ~49 days
+  constexpr uint32_t operator-(const Time48 &other) const {
+    // Two's complement subtraction works even across major boundary
+    // when the result is known to fit in 32 bits
+    return millis - other.millis;
+  }
+};
+
 class Component;
 struct RetryArgs;
 
@@ -94,15 +131,13 @@ class Scheduler {
     } name_;
     uint32_t interval;
     // Split time to handle millis() rollover. The scheduler combines the 32-bit millis()
-    // with a 16-bit rollover counter to create a 48-bit time space (using 32+16 bits).
-    // This is intentionally limited to 48 bits, not stored as a full 64-bit value.
-    // With 49.7 days per 32-bit rollover, the 16-bit counter supports
-    // 49.7 days × 65536 = ~8900 years. This ensures correct scheduling
-    // even when devices run for months. Split into two fields for better memory
-    // alignment on 32-bit systems.
-    uint32_t next_execution_low_;  // Lower 32 bits of execution time (millis value)
+    // with a 16-bit rollover counter to create a 48-bit time space. With 49.7 days per
+    // 32-bit rollover, the 16-bit counter supports 49.7 days × 65536 = ~8900 years.
+    // This ensures correct scheduling even when devices run for months.
+    // Split into two fields for better memory alignment on 32-bit systems.
+    uint32_t next_execution_millis_;  // Lower 32 bits of execution time (millis value)
     std::function<void()> callback;
-    uint16_t next_execution_high_;  // Upper 16 bits (millis_major counter)
+    uint16_t next_execution_major_;  // Upper 16 bits (millis_major counter)
 
 #ifdef ESPHOME_THREAD_MULTI_ATOMICS
     // Multi-threaded with atomics: use atomic for lock-free access
@@ -128,8 +163,8 @@ class Scheduler {
     SchedulerItem()
         : component(nullptr),
           interval(0),
-          next_execution_low_(0),
-          next_execution_high_(0),
+          next_execution_millis_(0),
+          next_execution_major_(0),
 #ifdef ESPHOME_THREAD_MULTI_ATOMICS
           // remove is initialized in the member declaration as std::atomic<bool>{false}
           type(TIMEOUT),
@@ -189,18 +224,11 @@ class Scheduler {
 
     static bool cmp(const std::unique_ptr<SchedulerItem> &a, const std::unique_ptr<SchedulerItem> &b);
 
-    // Note: We use 48 bits total (32 + 16), stored in a 64-bit value for API compatibility.
-    // The upper 16 bits of the 64-bit value are always zero, which is fine since
-    // millis_major_ is also 16 bits and they must match.
-    constexpr uint64_t get_next_execution() const {
-      return (static_cast<uint64_t>(next_execution_high_) << 32) | next_execution_low_;
-    }
+    constexpr Time48 get_next_execution() const { return {next_execution_millis_, next_execution_major_}; }
 
-    constexpr void set_next_execution(uint64_t value) {
-      next_execution_low_ = static_cast<uint32_t>(value);
-      // Cast to uint16_t intentionally truncates to lower 16 bits of the upper 32 bits.
-      // This is correct because millis_major_ that creates these values is also 16 bits.
-      next_execution_high_ = static_cast<uint16_t>(value >> 32);
+    constexpr void set_next_execution(Time48 value) {
+      next_execution_millis_ = value.millis;
+      next_execution_major_ = value.major;
     }
     constexpr const char *get_type_str() const { return (type == TIMEOUT) ? "timeout" : "interval"; }
     const LogString *get_source() const { return component ? component->get_component_log_str() : LOG_STR("unknown"); }
@@ -214,7 +242,7 @@ class Scheduler {
   void set_retry_common_(Component *component, bool is_static_string, const void *name_ptr, uint32_t initial_wait_time,
                          uint8_t max_attempts, std::function<RetryResult(uint8_t)> func, float backoff_increase_factor);
 
-  uint64_t millis_64_(uint32_t now);
+  Time48 millis_48_(uint32_t now);
   // Cleanup logically deleted items from the scheduler
   // Returns the number of items remaining after cleanup
   // IMPORTANT: This method should only be called from the main thread (loop task).
@@ -281,7 +309,7 @@ class Scheduler {
 #ifdef ESPHOME_DEBUG_SCHEDULER
   // Helper for debug logging in set_timer_common_ - extracted to reduce code size
   void debug_log_timer_(const SchedulerItem *item, bool is_static_string, const char *name_cstr,
-                        SchedulerItem::Type type, uint32_t delay, uint64_t now);
+                        SchedulerItem::Type type, uint32_t delay, Time48 now);
 #endif /* ESPHOME_DEBUG_SCHEDULER */
 
 #ifndef ESPHOME_THREAD_SINGLE
