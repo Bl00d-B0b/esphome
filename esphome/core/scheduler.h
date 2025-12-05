@@ -32,9 +32,15 @@ struct Time48 {
     return {new_millis, new_major};
   }
 
-  // Compare operators - manual implementation to avoid <compare> header overhead
+  // Compare operators - optimized for 32-bit platforms
+  // Written to generate same control flow as GCC's native 64-bit comparison:
+  // Uses cascading < comparisons instead of != to produce tighter branch sequences
   constexpr bool operator<(const Time48 &other) const {
-    return (major != other.major) ? (major < other.major) : (millis < other.millis);
+    if (major < other.major)
+      return true;
+    if (other.major < major)
+      return false;
+    return millis < other.millis;
   }
   constexpr bool operator>(const Time48 &other) const { return other < *this; }
   constexpr bool operator<=(const Time48 &other) const { return !(other < *this); }
