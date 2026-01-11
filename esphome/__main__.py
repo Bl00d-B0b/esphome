@@ -250,7 +250,10 @@ def choose_upload_log_host(
                 if not discovered and has_resolvable_address():
                     # No devices found, show base address as fallback
                     options.append(
-                        (f"Over The Air ({CORE.address}) (no devices found)", CORE.address)
+                        (
+                            f"Over The Air ({CORE.address}) (no devices found)",
+                            CORE.address,
+                        )
                     )
             elif has_resolvable_address():
                 options.append((f"Over The Air ({CORE.address})", CORE.address))
