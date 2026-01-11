@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from pytest import CaptureFixture
+from zeroconf import ServiceStateChange
 
 from esphome import platformio_api
 from esphome.__main__ import (
@@ -26,11 +27,13 @@ from esphome.__main__ import (
     command_wizard,
     compile_program,
     detect_external_components,
+    discover_mdns_devices,
     get_port_type,
     has_ip_address,
     has_mqtt,
     has_mqtt_ip_lookup,
     has_mqtt_logging,
+    has_name_add_mac_suffix,
     has_non_ip_address,
     has_resolvable_address,
     mqtt_get_ip,
@@ -52,6 +55,7 @@ from esphome.const import (
     CONF_MDNS,
     CONF_MQTT,
     CONF_NAME,
+    CONF_NAME_ADD_MAC_SUFFIX,
     CONF_OTA,
     CONF_PASSWORD,
     CONF_PLATFORM,
@@ -1652,6 +1656,106 @@ def test_has_resolvable_address() -> None:
     # Test with no address and mDNS disabled
     setup_core(config={CONF_MDNS: {CONF_DISABLED: True}}, address=None)
     assert has_resolvable_address() is False
+
+
+def test_has_name_add_mac_suffix() -> None:
+    """Test has_name_add_mac_suffix function."""
+
+    # Test with name_add_mac_suffix enabled
+    setup_core(config={CONF_ESPHOME: {CONF_NAME_ADD_MAC_SUFFIX: True}})
+    assert has_name_add_mac_suffix() is True
+
+    # Test with name_add_mac_suffix disabled
+    setup_core(config={CONF_ESPHOME: {CONF_NAME_ADD_MAC_SUFFIX: False}})
+    assert has_name_add_mac_suffix() is False
+
+    # Test with name_add_mac_suffix not set (defaults to False)
+    setup_core(config={CONF_ESPHOME: {}})
+    assert has_name_add_mac_suffix() is False
+
+    # Test with no esphome config
+    setup_core(config={})
+    assert has_name_add_mac_suffix() is False
+
+    # Test with no config at all
+    CORE.config = None
+    assert has_name_add_mac_suffix() is False
+
+
+@pytest.fixture
+def mock_mdns_discovery() -> Generator[MagicMock]:
+    """Fixture to mock mDNS discovery infrastructure."""
+    with (
+        patch("esphome.__main__.Zeroconf") as mock_zeroconf_class,
+        patch("esphome.__main__.ServiceBrowser") as mock_browser_class,
+        patch("esphome.__main__.time.sleep"),
+    ):
+        mock_zc = MagicMock()
+        mock_zeroconf_class.return_value = mock_zc
+        # Store references for test access
+        mock_zc._mock_browser_class = mock_browser_class
+        yield mock_zc
+
+
+@pytest.mark.parametrize(
+    ("discovered_services", "base_name", "expected"),
+    [
+        # Test matching devices with filtering
+        (
+            [
+                ("mydevice-abc123._esphomelib._tcp.local.", ServiceStateChange.Added),
+                ("mydevice-def456._esphomelib._tcp.local.", ServiceStateChange.Added),
+                (
+                    "otherdevice-xyz789._esphomelib._tcp.local.",
+                    ServiceStateChange.Added,
+                ),
+            ],
+            "mydevice",
+            ["mydevice-abc123.local", "mydevice-def456.local"],
+        ),
+        # Test no matches
+        (
+            [
+                (
+                    "otherdevice-abc123._esphomelib._tcp.local.",
+                    ServiceStateChange.Added,
+                ),
+            ],
+            "mydevice",
+            [],
+        ),
+        # Test deduplication (same device Added then Updated)
+        (
+            [
+                ("mydevice-abc123._esphomelib._tcp.local.", ServiceStateChange.Added),
+                ("mydevice-abc123._esphomelib._tcp.local.", ServiceStateChange.Updated),
+            ],
+            "mydevice",
+            ["mydevice-abc123.local"],
+        ),
+    ],
+    ids=["matching_with_filter", "no_matches", "deduplication"],
+)
+def test_discover_mdns_devices(
+    mock_mdns_discovery: MagicMock,
+    discovered_services: list[tuple[str, ServiceStateChange]],
+    base_name: str,
+    expected: list[str],
+) -> None:
+    """Test discover_mdns_devices function with various scenarios."""
+
+    def capture_callback(zc, service_type, handlers):
+        callback = handlers[0]
+        for service_name, state_change in discovered_services:
+            callback(mock_mdns_discovery, service_type, service_name, state_change)
+        return MagicMock()
+
+    mock_mdns_discovery._mock_browser_class.side_effect = capture_callback
+
+    result = discover_mdns_devices(base_name, timeout=0.1)
+
+    assert result == expected
+    mock_mdns_discovery.close.assert_called_once()
 
 
 def test_command_wizard(tmp_path: Path) -> None:
