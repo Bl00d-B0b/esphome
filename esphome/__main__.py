@@ -13,6 +13,7 @@ import time
 from typing import Protocol
 
 import argcomplete
+from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 
 # Note: Do not import modules from esphome.components here, as this would
 # cause them to be loaded before external components are processed, resulting
@@ -34,6 +35,7 @@ from esphome.const import (
     CONF_MDNS,
     CONF_MQTT,
     CONF_NAME,
+    CONF_NAME_ADD_MAC_SUFFIX,
     CONF_OTA,
     CONF_PASSWORD,
     CONF_PLATFORM,
@@ -59,6 +61,7 @@ from esphome.util import (
     run_external_process,
     safe_print,
 )
+from esphome.zeroconf import ESPHOME_SERVICE_TYPE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -238,13 +241,35 @@ def choose_upload_log_host(
             options.append((f"MQTT ({mqtt_config[CONF_BROKER]})", "MQTT"))
 
         if has_api():
-            if has_resolvable_address():
+            if has_name_add_mac_suffix() and has_mdns() and has_non_ip_address():
+                # Discover devices via mDNS when name_add_mac_suffix is enabled
+                safe_print("Discovering devices...")
+                discovered = discover_mdns_devices(CORE.name)
+                for device_addr in discovered:
+                    options.append((f"Over The Air ({device_addr})", device_addr))
+                if not discovered and has_resolvable_address():
+                    # No devices found, show base address as fallback
+                    options.append(
+                        (f"Over The Air ({CORE.address}) (no devices found)", CORE.address)
+                    )
+            elif has_resolvable_address():
                 options.append((f"Over The Air ({CORE.address})", CORE.address))
             if has_mqtt_ip_lookup():
                 options.append(("Over The Air (MQTT IP lookup)", "MQTTIP"))
 
     elif purpose == Purpose.UPLOADING and has_ota():
-        if has_resolvable_address():
+        if has_name_add_mac_suffix() and has_mdns() and has_non_ip_address():
+            # Discover devices via mDNS when name_add_mac_suffix is enabled
+            safe_print("Discovering devices...")
+            discovered = discover_mdns_devices(CORE.name)
+            for device_addr in discovered:
+                options.append((f"Over The Air ({device_addr})", device_addr))
+            if not discovered and has_resolvable_address():
+                # No devices found, show base address as fallback
+                options.append(
+                    (f"Over The Air ({CORE.address}) (no devices found)", CORE.address)
+                )
+        elif has_resolvable_address():
             options.append((f"Over The Air ({CORE.address})", CORE.address))
         if has_mqtt_ip_lookup():
             options.append(("Over The Air (MQTT IP lookup)", "MQTTIP"))
@@ -332,6 +357,54 @@ def has_resolvable_address() -> bool:
 
     # .local mDNS hostnames are only resolvable if mDNS is enabled
     return not CORE.address.endswith(".local")
+
+
+def has_name_add_mac_suffix() -> bool:
+    """Check if name_add_mac_suffix is enabled in the config."""
+    if CORE.config is None:
+        return False
+    esphome_config = CORE.config.get(CONF_ESPHOME, {})
+    return esphome_config.get(CONF_NAME_ADD_MAC_SUFFIX, False)
+
+
+def discover_mdns_devices(base_name: str, timeout: float = 5.0) -> list[str]:
+    """Discover ESPHome devices via mDNS that match the base name pattern.
+
+    When name_add_mac_suffix is enabled, devices advertise as <base_name>-<mac>.local.
+    This function discovers all such devices on the network.
+
+    Args:
+        base_name: The base device name (without MAC suffix)
+        timeout: How long to wait for mDNS responses (default 5 seconds)
+
+    Returns:
+        List of discovered device addresses (e.g., ['device-abc123.local'])
+    """
+    discovered: list[str] = []
+    prefix = f"{base_name}-"
+
+    def on_service_state_change(
+        zeroconf: Zeroconf,
+        service_type: str,
+        name: str,
+        state_change: ServiceStateChange,
+    ) -> None:
+        if state_change in (ServiceStateChange.Added, ServiceStateChange.Updated):
+            # Extract device name from service name (removes service type suffix)
+            device_name = name.partition(".")[0]
+            # Check if this device matches our base name pattern
+            if device_name.startswith(prefix) and device_name not in discovered:
+                discovered.append(device_name)
+
+    zc = Zeroconf()
+    try:
+        ServiceBrowser(zc, ESPHOME_SERVICE_TYPE, handlers=[on_service_state_change])
+        # Wait for discovery
+        time.sleep(timeout)
+    finally:
+        zc.close()
+
+    return [f"{name}.local" for name in sorted(discovered)]
 
 
 def mqtt_get_ip(config: ConfigType, username: str, password: str, client_id: str):
