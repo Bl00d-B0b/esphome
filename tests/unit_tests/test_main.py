@@ -27,7 +27,6 @@ from esphome.__main__ import (
     command_wizard,
     compile_program,
     detect_external_components,
-    discover_mdns_devices,
     get_port_type,
     has_ip_address,
     has_mqtt,
@@ -72,6 +71,7 @@ from esphome.const import (
     PLATFORM_RP2040,
 )
 from esphome.core import CORE, EsphomeError
+from esphome.zeroconf import discover_mdns_devices
 
 
 def strip_ansi_codes(text: str) -> str:
@@ -1686,14 +1686,16 @@ def test_has_name_add_mac_suffix() -> None:
 def mock_mdns_discovery() -> Generator[MagicMock]:
     """Fixture to mock mDNS discovery infrastructure."""
     with (
-        patch("esphome.__main__.Zeroconf") as mock_zeroconf_class,
-        patch("esphome.__main__.ServiceBrowser") as mock_browser_class,
-        patch("esphome.__main__.time.sleep"),
+        patch("esphome.zeroconf.Zeroconf") as mock_zeroconf_class,
+        patch("esphome.zeroconf.ServiceBrowser") as mock_browser_class,
+        patch("esphome.zeroconf.time.sleep"),
     ):
         mock_zc = MagicMock()
         mock_zeroconf_class.return_value = mock_zc
+        mock_browser = MagicMock()
         # Store references for test access
         mock_zc._mock_browser_class = mock_browser_class
+        mock_zc._mock_browser = mock_browser
         yield mock_zc
 
 
@@ -1743,18 +1745,20 @@ def test_discover_mdns_devices(
     expected: list[str],
 ) -> None:
     """Test discover_mdns_devices function with various scenarios."""
+    mock_browser = mock_mdns_discovery._mock_browser
 
     def capture_callback(zc, service_type, handlers):
         callback = handlers[0]
         for service_name, state_change in discovered_services:
             callback(mock_mdns_discovery, service_type, service_name, state_change)
-        return MagicMock()
+        return mock_browser
 
     mock_mdns_discovery._mock_browser_class.side_effect = capture_callback
 
     result = discover_mdns_devices(base_name, timeout=0.1)
 
     assert result == expected
+    mock_browser.cancel.assert_called_once()
     mock_mdns_discovery.close.assert_called_once()
 
 
