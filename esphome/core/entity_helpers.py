@@ -31,21 +31,16 @@ _KEY_DC_IDX = "_entity_dc_idx"
 _KEY_UOM_IDX = "_entity_uom_idx"
 _KEY_ICON_IDX = "_entity_icon_idx"
 
-# Bit layout for entity_string_packed_ (must match C++ constants in entity_base.h):
-#
-#   uint32_t entity_string_packed_:
-#     [31 .......... 20][19 ......... 10][9 ........... 0]
-#       icon (12 bits)    UoM (10 bits)   device_class (10 bits)
-#         max 4095         max 1023         max 1023
-#
+# Bit layout for set_entity_strings(packed) — must match C++ setter in entity_base.h:
+#   [23..16] icon (8 bits) | [15..8] UoM (8 bits) | [7..0] device_class (8 bits)
 _DC_SHIFT = 0
-_UOM_SHIFT = 10
-_ICON_SHIFT = 20
+_UOM_SHIFT = 8
+_ICON_SHIFT = 16
 
-# Maximum unique strings per category (must match bit widths above)
-_MAX_DEVICE_CLASSES = 0x3FF  # 10 bits → 1023
-_MAX_UNITS = 0x3FF  # 10 bits → 1023
-_MAX_ICONS = 0xFFF  # 12 bits → 4095
+# Maximum unique strings per category (8-bit index, 0 = not set)
+_MAX_DEVICE_CLASSES = 0xFF  # 255
+_MAX_UNITS = 0xFF  # 255
+_MAX_ICONS = 0xFF  # 255
 
 
 @dataclass
