@@ -1,5 +1,5 @@
 import esphome.codegen as cg
-from esphome.components import esp32_ble_tracker, sensor
+from esphome.components import ble_device_base, esp32_ble_tracker, sensor
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_IBEACON_MAJOR,
@@ -14,7 +14,7 @@ from esphome.const import (
 
 CONF_IRK = "irk"
 
-DEPENDENCIES = ["esp32_ble_tracker"]
+AUTO_LOAD = ["ble_device_base"]
 
 ble_rssi_ns = cg.esphome_ns.namespace("ble_rssi")
 BLERSSISensor = ble_rssi_ns.class_(
@@ -48,8 +48,9 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_IBEACON_UUID): esp32_ble_tracker.bt_uuid,
         }
     )
-    .extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA)
+    .extend(ble_device_base.ble_device_schema())
     .extend(cv.COMPONENT_SCHEMA),
+    ble_device_base.inject_ble_hub,
     cv.has_exactly_one_key(
         CONF_MAC_ADDRESS, CONF_IRK, CONF_SERVICE_UUID, CONF_IBEACON_UUID
     ),
@@ -60,7 +61,7 @@ CONFIG_SCHEMA = cv.All(
 async def to_code(config):
     var = await sensor.new_sensor(config)
     await cg.register_component(var, config)
-    await esp32_ble_tracker.register_ble_device(var, config)
+    await ble_device_base.register_ble_device(var, config)
 
     if mac_address := config.get(CONF_MAC_ADDRESS):
         cg.add(var.set_address(mac_address.as_hex))

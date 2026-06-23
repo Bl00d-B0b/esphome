@@ -23,6 +23,8 @@ from esphome.const import (
 
 from . import bthome_mithermometer_base_schema, setup_bthome_mithermometer
 
+AUTO_LOAD = ["ble_device_base"]
+
 CODEOWNERS = ["@nagyrobi"]
 
 DEPENDENCIES = ["esp32_ble_tracker"]

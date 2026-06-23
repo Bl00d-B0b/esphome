@@ -1,5 +1,5 @@
 import esphome.codegen as cg
-from esphome.components import binary_sensor, esp32_ble_tracker
+from esphome.components import binary_sensor, ble_device_base, esp32_ble_tracker
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_IBEACON_MAJOR,
@@ -13,7 +13,7 @@ from esphome.const import (
 
 CONF_IRK = "irk"
 
-DEPENDENCIES = ["esp32_ble_tracker"]
+AUTO_LOAD = ["ble_device_base"]
 
 ble_presence_ns = cg.esphome_ns.namespace("ble_presence")
 BLEPresenceDevice = ble_presence_ns.class_(
@@ -48,8 +48,9 @@ CONFIG_SCHEMA = cv.All(
             ),
         }
     )
-    .extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA)
+    .extend(ble_device_base.ble_device_schema())
     .extend(cv.COMPONENT_SCHEMA),
+    ble_device_base.inject_ble_hub,
     cv.has_exactly_one_key(
         CONF_MAC_ADDRESS, CONF_IRK, CONF_SERVICE_UUID, CONF_IBEACON_UUID
     ),
@@ -60,7 +61,7 @@ CONFIG_SCHEMA = cv.All(
 async def to_code(config):
     var = await binary_sensor.new_binary_sensor(config)
     await cg.register_component(var, config)
-    await esp32_ble_tracker.register_ble_device(var, config)
+    await ble_device_base.register_ble_device(var, config)
 
     cg.add(var.set_timeout(config[CONF_TIMEOUT].total_milliseconds))
     if min_rssi := config.get(CONF_MIN_RSSI):
