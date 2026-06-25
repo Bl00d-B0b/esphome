@@ -27,7 +27,7 @@ Typical usage — continuous proxy (radio always on BLE):
       scan_parameters:
         continuous: true
 
-    bluetooth_proxy_base:       # separate component: forwards advertisements to Home Assistant
+    bluetooth_proxy:       # separate component: forwards advertisements to Home Assistant
 
 Single-core WiFi/BLE time-share (scan only while HA is connected):
 
@@ -101,10 +101,10 @@ def _require_ble5_family():
         )
 
 
-# BleProxyHub: the neutral hub interface (bluetooth_proxy_base) that the tracker
+# BleProxyHub: the neutral hub interface (bluetooth_proxy) that the tracker
 # implements so the generic Bluetooth proxy can attach via cv.use_id. Declared by
 # namespace path (no module import) to avoid a hard Python dependency.
-ble_proxy_hub = cg.esphome_ns.namespace("bluetooth_proxy_base").class_("BleProxyHub")
+ble_proxy_hub = cg.esphome_ns.namespace("bluetooth_proxy").class_("BleProxyHub")
 
 bk72xx_ble_tracker_ns = cg.esphome_ns.namespace("bk72xx_ble_tracker")
 BK72xxBLETracker = bk72xx_ble_tracker_ns.class_(
@@ -113,7 +113,7 @@ BK72xxBLETracker = bk72xx_ble_tracker_ns.class_(
 
 # NOTE: this component is the BLE scanner only. Local BLE sensor support
 # (ble_presence/ble_rssi/ble_scanner/bthome) and the Bluetooth proxy
-# (bluetooth_proxy_base) are separate components that attach to this tracker —
+# (bluetooth_proxy) are separate components that attach to this tracker —
 # they are intentionally NOT pulled in here, so the scanner stands on its own.
 StartScanAction = bk72xx_ble_tracker_ns.class_("StartScanAction", automation.Action)
 StopScanAction = bk72xx_ble_tracker_ns.class_("StopScanAction", automation.Action)
@@ -356,7 +356,7 @@ async def to_code(config):
     if libretiny.get_libretiny_family() == FAMILY_BK7231N:
         cg.add_define("BK72XX_BLE_HAS_COMMON_BDADDR")
 
-    # The Bluetooth proxy is the separate bluetooth_proxy_base component, added
+    # The Bluetooth proxy is the separate bluetooth_proxy component, added
     # independently (e.g. when testing proxy mode) — nothing to wire here.
 
     # ---------------------------------------------------------------------------

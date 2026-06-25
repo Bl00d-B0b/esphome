@@ -164,4 +164,9 @@ extern BluetoothProxy *global_bluetooth_proxy;  // NOLINT(cppcoreguidelines-avoi
 
 }  // namespace esphome::bluetooth_proxy
 
+#else  // USE_ESP32
+
+// Off-ESP32 (LibreTiny): the same bluetooth_proxy::BluetoothProxy, advertisement-proxy only.
+#include "bluetooth_proxy_libretiny.h"
+
 #endif  // USE_ESP32

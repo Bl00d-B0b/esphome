@@ -1,24 +1,27 @@
+#pragma once
+
 // bluetooth_proxy_hub.h
 //
-// Neutral hub interface that a LibreTiny BLE tracker implements so the shared,
-// generic BluetoothProxyBase can forward its advertisements without knowing the
-// chip. Deliberately lightweight and NOT gated on USE_BLUETOOTH_PROXY, so a tracker
-// can implement it whether or not a Bluetooth proxy is configured.
-
-#pragma once
+// Neutral hub interface that a LibreTiny BLE tracker (bk72xx_ble_tracker,
+// ln882h_ble_tracker, …) implements so the generic, chip-agnostic BluetoothProxy can
+// forward its advertisements without knowing the chip. Lightweight and NOT gated on
+// USE_BLUETOOTH_PROXY, so a tracker can implement it whether or not a proxy is configured.
+//
+// On ESP32 the proxy gets its advertisements from esp32_ble_tracker directly, so this
+// interface is only used off-ESP32.
 
 #ifndef USE_ESP32
 
 #include <cstdint>
 #include <functional>
 
-namespace esphome::bluetooth_proxy_base {
+namespace esphome::bluetooth_proxy {
 
 // Raw BLE advertisement callback — invoked by the hub from the BLE RTOS task.
 using ScanResultCallback =
     std::function<void(const uint8_t *mac, int rssi, uint8_t addr_type, const uint8_t *data, uint16_t data_len)>;
 
-// Implemented by each tracker hub (BK72xxBLETracker, Ln882hBLETracker, …).
+// Implemented by each LibreTiny tracker hub (BK72xxBLETracker, LN882HBLETracker, …).
 class BleProxyHub {
  public:
   virtual ~BleProxyHub() = default;
@@ -36,6 +39,6 @@ class BleProxyHub {
   virtual void set_proxy_scan_result_callback(ScanResultCallback cb) = 0;
 };
 
-}  // namespace esphome::bluetooth_proxy_base
+}  // namespace esphome::bluetooth_proxy
 
 #endif  // !USE_ESP32

@@ -8,7 +8,7 @@
 //   - BLE_5_REPORT_ADV notice carrying a recv_adv_t for each advertisement.
 //
 // This file implements scanning only.  Advertisement forwarding to Home
-// Assistant is handled by the separate bluetooth_proxy_base component.
+// Assistant is handled by the separate bluetooth_proxy component.
 //
 // NOTE: the Beken BDK BLE 5.x stack is compiled and linked by the LibreTiny
 // beken-72xx builder itself (prebuilt libble_bk7231n.a + ble_5_x_rw sources,
@@ -86,7 +86,7 @@ void BK72xxBLETracker::setup() {
   // size is bounded by MAX_ADV_QUEUE_SIZE, so a reserved buffer never reallocates.
   this->adv_queue_.reserve(MAX_ADV_QUEUE_SIZE);
   this->adv_drain_.reserve(MAX_ADV_QUEUE_SIZE);
-  // Resolve MAC early so the bluetooth_proxy_base proxy can report it to HA on first
+  // Resolve MAC early so the bluetooth_proxy proxy can report it to HA on first
   // connection (before the BLE stack is fully initialised).
   this->resolve_mac_();
   ESP_LOGI(TAG, "BK72xx BLE tracker ready (scan=passive, window=%u BLE units, interval=%u BLE units)",
@@ -314,7 +314,7 @@ void BK72xxBLETracker::print_bt_device_info(const esp32_ble_tracker::ESPBTDevice
 // ---------------------------------------------------------------------------
 
 void BK72xxBLETracker::resolve_mac_() {
-  // NOTE: byte order is reported to HA by the bluetooth_proxy_base proxy — verify on
+  // NOTE: byte order is reported to HA by the bluetooth_proxy proxy — verify on
   // hardware that the address displayed matches the chip's BLE MAC.
 #ifdef BK72XX_BLE_HAS_COMMON_BDADDR
   // BK7231N: the BDK populates common_default_bdaddr (LSB-first, BLE convention)

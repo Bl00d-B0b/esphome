@@ -19,7 +19,7 @@ Typical usage — continuous proxy (radio always on BLE):
       scan_parameters:
         active: true
         continuous: true
-    bluetooth_proxy_base:     # forward advertisements to Home Assistant (separate component)
+    bluetooth_proxy:     # forward advertisements to Home Assistant (separate component)
 
 Single-core WiFi/BLE time-share (scan only while HA is connected):
 
@@ -70,10 +70,10 @@ CONF_LN882H_BLE_ID = "ln882h_ble_id"
 DEPENDENCIES = ["ln882x"]
 CODEOWNERS = ["@Bl00d-B0b"]
 
-# BleProxyHub: the neutral hub interface (bluetooth_proxy_base) that the tracker
+# BleProxyHub: the neutral hub interface (bluetooth_proxy) that the tracker
 # implements so the generic Bluetooth proxy can attach via cv.use_id. Declared by
 # namespace path (no module import) to avoid a hard Python dependency.
-ble_proxy_hub = cg.esphome_ns.namespace("bluetooth_proxy_base").class_("BleProxyHub")
+ble_proxy_hub = cg.esphome_ns.namespace("bluetooth_proxy").class_("BleProxyHub")
 
 ln882h_ble_tracker_ns = cg.esphome_ns.namespace("ln882h_ble_tracker")
 LN882HBLETracker = ln882h_ble_tracker_ns.class_(
@@ -82,7 +82,7 @@ LN882HBLETracker = ln882h_ble_tracker_ns.class_(
 
 # NOTE: this component is the BLE scanner only. Local BLE sensor support
 # (ble_presence/ble_rssi/ble_scanner/bthome) and the Bluetooth proxy
-# (bluetooth_proxy_base) are separate components that attach to this tracker —
+# (bluetooth_proxy) are separate components that attach to this tracker —
 # they are intentionally NOT pulled in here, so the scanner stands on its own.
 StartScanAction = ln882h_ble_tracker_ns.class_("StartScanAction", automation.Action)
 StopScanAction = ln882h_ble_tracker_ns.class_("StopScanAction", automation.Action)

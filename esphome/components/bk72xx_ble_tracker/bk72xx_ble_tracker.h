@@ -12,7 +12,7 @@
 //
 // YAML config (values shown are the defaults; interval/window are a 30 % duty
 // cycle, the BK reference scan rate). The Bluetooth proxy is the separate
-// bluetooth_proxy_base component.
+// bluetooth_proxy component.
 //
 //   bk72xx_ble_tracker:
 //     scan_parameters:
@@ -26,7 +26,7 @@
 #ifndef USE_ESP32
 
 #include "bk72xx_ble_device.h"
-#include "esphome/components/bluetooth_proxy_base/bluetooth_proxy_hub.h"
+#include "esphome/components/bluetooth_proxy/bluetooth_proxy_hub.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 
@@ -69,7 +69,7 @@ class BLEEndOfScanTrigger;
 // BK72xxBLETracker
 // ---------------------------------------------------------------------------
 
-class BK72xxBLETracker : public Component, public bluetooth_proxy_base::BleProxyHub {
+class BK72xxBLETracker : public Component, public bluetooth_proxy::BleProxyHub {
  public:
   // ---- ESPHome Component ----
   void setup() override;
@@ -88,13 +88,13 @@ class BK72xxBLETracker : public Component, public bluetooth_proxy_base::BleProxy
   void start_scan();
   void stop_scan();
 
-  // ---- Public accessors (used by the optional, separate bluetooth_proxy_base proxy) ----
+  // ---- Public accessors (used by the optional, separate bluetooth_proxy proxy) ----
   // ble_mac_ is stored LSB-first (from common_default_bdaddr).
   void get_mac(uint8_t out[6]) const { memcpy(out, this->ble_mac_, 6); }
   bool is_scan_running() const { return this->scan_running_; }
   void set_scan_result_callback(ScanResultCallback cb) { this->scan_result_callback_ = std::move(cb); }
 
-  // ---- bluetooth_proxy_base::BleProxyHub interface ----
+  // ---- bluetooth_proxy::BleProxyHub interface ----
   // The proxy is hub-agnostic; these forward the BK scanner's state/MAC/callback.
   void get_proxy_mac(uint8_t out[6]) override {
     // ble_mac_ is LSB-first; the proxy wants printable MSB-first order.
@@ -103,7 +103,7 @@ class BK72xxBLETracker : public Component, public bluetooth_proxy_base::BleProxy
   }
   bool proxy_scan_running() override { return this->scan_running_; }
   bool proxy_scan_active() override { return false; }  // BK7231N scans passive-only
-  void set_proxy_scan_result_callback(bluetooth_proxy_base::ScanResultCallback cb) override {
+  void set_proxy_scan_result_callback(bluetooth_proxy::ScanResultCallback cb) override {
     this->scan_result_callback_ = std::move(cb);
   }
 
