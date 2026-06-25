@@ -9,8 +9,8 @@ namespace esphome::bluetooth_proxy {
 
 static const char *const TAG = "bluetooth_proxy";
 
-void BluetoothProxyAdvertisements::add_advertisement(uint64_t address, int8_t rssi, uint8_t address_type,
-                                                     const uint8_t *data, uint8_t data_len) {
+void BluetoothProxyAdvertisements::add_advertisement(uint64_t address, int rssi, uint8_t address_type,
+                                                     const uint8_t *data, uint16_t data_len) {
   // Discard when no API client is subscribed (mirrors the ESP32 path, which only
   // appends while api_connection_ is set).
   if (this->api_connection_ == nullptr)
@@ -18,7 +18,8 @@ void BluetoothProxyAdvertisements::add_advertisement(uint64_t address, int8_t rs
 
   auto &adv = this->response_.advertisements[this->response_.advertisements_len];
   // data[] is 62 bytes (legacy adv 31 + scan response 31); never copy past it.
-  uint8_t copy_len = data_len <= sizeof(adv.data) ? data_len : static_cast<uint8_t>(sizeof(adv.data));
+  uint8_t copy_len =
+      data_len <= sizeof(adv.data) ? static_cast<uint8_t>(data_len) : static_cast<uint8_t>(sizeof(adv.data));
   adv.address = address;
   adv.rssi = rssi;
   adv.address_type = address_type;

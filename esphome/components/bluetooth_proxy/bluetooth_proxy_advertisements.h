@@ -43,7 +43,7 @@ class BluetoothProxyAdvertisements {
   // Append one raw advertisement to the current batch, flushing automatically once the
   // batch reaches BLUETOOTH_PROXY_ADVERTISEMENT_BATCH_SIZE. No-op if not subscribed.
   // Must be called on the main loop.
-  void add_advertisement(uint64_t address, int8_t rssi, uint8_t address_type, const uint8_t *data, uint8_t data_len);
+  void add_advertisement(uint64_t address, int rssi, uint8_t address_type, const uint8_t *data, uint16_t data_len);
 
   api::APIConnection *get_api_connection() const { return this->api_connection_; }
 
