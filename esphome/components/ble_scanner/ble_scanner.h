@@ -8,8 +8,10 @@
 #include "esphome/components/ble_device_base/ble_device.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 
-#ifdef USE_ESP32
-
+// No platform #ifdef: ble_device_base/ble_device.h provides the ESPBTDevice/Listener
+// types on every platform (forwarding to esp32_ble_tracker on ESP32), and ble_scanner is
+// only ever compiled when configured — which requires a BLE hub via ble_device_base, so
+// it builds on ESP32, BK72xx, LN882H and any future BLE platform without a per-chip guard.
 namespace esphome::ble_scanner {
 
 class BLEScanner final : public text_sensor::TextSensor,
@@ -45,5 +47,3 @@ class BLEScanner final : public text_sensor::TextSensor,
 };
 
 }  // namespace esphome::ble_scanner
-
-#endif
