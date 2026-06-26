@@ -122,6 +122,7 @@ class ESPBTDevice {
   /// Return MAC as packed uint64 (byte 0 in LSB, matching ESP32 address_uint64).
   uint64_t address_uint64() const;
   const uint8_t *address() const { return address_; }
+  uint8_t get_address_type() const { return this->address_type_; }
 
   int get_rssi() const { return rssi_; }
   const std::string &get_name() const { return name_; }
