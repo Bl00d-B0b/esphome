@@ -4,8 +4,6 @@
 #include "esphome/components/ble_device_base/ble_device.h"
 #include "esphome/components/sensor/sensor.h"
 
-#ifdef USE_ESP32
-
 namespace esphome::ble_rssi {
 
 class BLERSSISensor final : public sensor::Sensor, public esp32_ble_tracker::ESPBTDeviceListener, public Component {
@@ -120,5 +118,3 @@ class BLERSSISensor final : public sensor::Sensor, public esp32_ble_tracker::ESP
 };
 
 }  // namespace esphome::ble_rssi
-
-#endif

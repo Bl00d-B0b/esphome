@@ -8,13 +8,24 @@
 #include <cstring>
 #include <span>
 
+// AES-CCM crypto backend for bindkey decryption, selected per platform:
+//   - ESP32 + ESP-IDF >= 6.0           -> PSA crypto (psa_aead_decrypt)
+//   - ESP32 + ESP-IDF < 6.0, LibreTiny -> mbedtls CCM (when MBEDTLS_CCM_C is enabled)
+// With no backend the component still builds; only *encrypted* BTHome devices are unsupported
+// (a warning is logged), while unencrypted advertisements work on every platform.
 #ifdef USE_ESP32
-
 #include <esp_idf_version.h>
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
 #include <psa/crypto.h>
-#else
+#define BTHOME_CRYPTO_PSA
+#elif __has_include("mbedtls/ccm.h")
 #include "mbedtls/ccm.h"
+#endif
+#elif __has_include(<mbedtls/ccm.h>)
+#include <mbedtls/ccm.h>
+#endif
+#if !defined(BTHOME_CRYPTO_PSA) && defined(MBEDTLS_CCM_C)
+#define BTHOME_CRYPTO_MBEDTLS_CCM
 #endif
 
 namespace esphome::bthome_mithermometer {
@@ -177,6 +188,14 @@ void BTHomeMiThermometer::set_bindkey(std::initializer_list<uint8_t> bindkey) {
 
 bool BTHomeMiThermometer::decrypt_bthome_payload_(const std::vector<uint8_t> &data, uint64_t source_address,
                                                   std::vector<uint8_t> &payload) const {
+#if !defined(BTHOME_CRYPTO_PSA) && !defined(BTHOME_CRYPTO_MBEDTLS_CCM)
+  // No AES-CCM backend on this platform: encrypted BTHome advertisements cannot be decrypted
+  // (unencrypted ones still work). Reported once per device by handle_service_data_.
+  (void) data;
+  (void) source_address;
+  (void) payload;
+  return false;
+#else
   if (data.size() <= 1 + BTHOME_COUNTER_SIZE + BTHOME_MIC_SIZE) {
     ESP_LOGVV(TAG, "Encrypted BTHome payload too short: %zu", data.size());
     return false;
@@ -200,7 +219,7 @@ bool BTHomeMiThermometer::decrypt_bthome_payload_(const std::vector<uint8_t> &da
   const uint8_t *ciphertext = data.data() + 1;
   const uint8_t *mic = data.data() + data.size() - BTHOME_MIC_SIZE;
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
+#if defined(BTHOME_CRYPTO_PSA)
   // PSA AEAD expects ciphertext + tag concatenated
   // BLE advertisement max payload is 31 bytes, so this is always sufficient
   static constexpr size_t MAX_CT_WITH_TAG = 32;
@@ -251,6 +270,7 @@ bool BTHomeMiThermometer::decrypt_bthome_payload_(const std::vector<uint8_t> &da
   }
 #endif
   return true;
+#endif
 }
 
 bool BTHomeMiThermometer::handle_service_data_(const esp32_ble_tracker::ServiceData &service_data,
@@ -435,5 +455,3 @@ bool BTHomeMiThermometer::handle_service_data_(const esp32_ble_tracker::ServiceD
 }
 
 }  // namespace esphome::bthome_mithermometer
-
-#endif

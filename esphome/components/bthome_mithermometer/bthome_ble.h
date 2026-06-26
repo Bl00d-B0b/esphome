@@ -8,8 +8,9 @@
 #include <initializer_list>
 #include <vector>
 
-#ifdef USE_ESP32
-
+// No platform #ifdef: ble_device_base provides the BLE types on every platform; this
+// component is only compiled when configured (which requires a BLE hub). bindkey (AES-CCM)
+// decryption availability is selected per platform in the .cpp.
 namespace esphome::bthome_mithermometer {
 
 class BTHomeMiThermometer final : public esp32_ble_tracker::ESPBTDeviceListener, public Component {
@@ -45,5 +46,3 @@ class BTHomeMiThermometer final : public esp32_ble_tracker::ESPBTDeviceListener,
 };
 
 }  // namespace esphome::bthome_mithermometer
-
-#endif

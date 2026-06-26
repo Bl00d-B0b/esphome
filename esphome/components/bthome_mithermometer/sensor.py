@@ -27,8 +27,6 @@ AUTO_LOAD = ["ble_device_base"]
 
 CODEOWNERS = ["@nagyrobi"]
 
-DEPENDENCIES = ["esp32_ble_tracker"]
-
 CONFIG_SCHEMA = bthome_mithermometer_base_schema(
     {
         cv.Optional(CONF_TEMPERATURE): sensor.sensor_schema(

@@ -4,8 +4,8 @@
 #include "esphome/components/ble_device_base/ble_device.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
 
-#ifdef USE_ESP32
-
+// No platform #ifdef: ble_device_base provides the BLE types (incl. resolve_irk) on every
+// platform; this sensor is only compiled when configured, which requires a BLE hub.
 namespace esphome::ble_presence {
 
 class BLEPresenceDevice final : public binary_sensor::BinarySensorInitiallyOff,
@@ -137,5 +137,3 @@ class BLEPresenceDevice final : public binary_sensor::BinarySensorInitiallyOff,
 };
 
 }  // namespace esphome::ble_presence
-
-#endif
