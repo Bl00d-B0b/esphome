@@ -1,0 +1,7 @@
+# ble_scanner on a BK72xx hub — config-only validation (the BLE 5.x stack needs the
+# beken-bdk SDK, so this is not compiled here). The hub id is auto-resolved.
+bk72xx_ble_tracker:
+
+text_sensor:
+  - platform: ble_scanner
+    name: Scanner

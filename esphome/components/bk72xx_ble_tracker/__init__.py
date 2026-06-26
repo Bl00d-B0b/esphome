@@ -81,6 +81,9 @@ CONF_BK72XX_BLE_ID = "bk72xx_ble_id"
 # BK7252N/BK7253 at 5.2, …) is supported automatically. A non-5.x SoC fails the
 # build with a clear #error instead of a cryptic missing-header/link failure.
 DEPENDENCIES = ["bk72xx"]
+# The tracker's C++ uses the shared ble_device_base advertisement types (ESPBTDevice, …),
+# and BLE sensor components register through ble_device_base, so pull it into every build.
+AUTO_LOAD = ["ble_device_base"]
 CODEOWNERS = ["@Bl00d-B0b"]
 
 
@@ -93,6 +96,19 @@ bk72xx_ble_tracker_ns = cg.esphome_ns.namespace("bk72xx_ble_tracker")
 BK72xxBLETracker = bk72xx_ble_tracker_ns.class_(
     "BK72xxBLETracker", cg.Component, ble_proxy_hub
 )
+
+
+async def register_ble_device(var, config):
+    """Register `var` as a BLE-advertisement listener on this hub.
+
+    This is the ble_device_base hub contract: ble_device_base.register_ble_device()
+    dispatches here for the bk72xx platform, and inject_ble_hub() has already filled
+    config[CONF_BK72XX_BLE_ID] with the hub id (auto-resolved when a single hub exists).
+    """
+    paren = await cg.get_variable(config[CONF_BK72XX_BLE_ID])
+    cg.add(paren.register_listener(var))
+    return var
+
 
 # NOTE: this component is the BLE scanner only. Local BLE sensor support
 # (ble_presence/ble_rssi/ble_scanner/bthome) and the Bluetooth proxy

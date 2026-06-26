@@ -25,7 +25,7 @@
 
 #ifdef USE_LIBRETINY
 
-#include "bk72xx_ble_device.h"
+#include "esphome/components/ble_device_base/ble_device.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 

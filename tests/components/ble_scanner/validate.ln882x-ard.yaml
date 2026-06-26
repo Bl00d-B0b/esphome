@@ -1,0 +1,7 @@
+# ble_scanner on an LN882H hub — config-only validation (the BLE 5.x stack needs the
+# LN882H BLE SDK, so this is not compiled here). The hub id is auto-resolved.
+ln882h_ble_tracker:
+
+text_sensor:
+  - platform: ble_scanner
+    name: Scanner

@@ -7,7 +7,13 @@
 
 #include "ble_device.h"
 
+// LibreTiny links mbedtls for TLS on most targets, but that is not guaranteed on every
+// non-ESP32 BLE platform. Guard the include so the component still builds where the header
+// is absent; resolve_irk() then degrades to "no match" (see its body).
+#if __has_include(<mbedtls/aes.h>)
 #include <mbedtls/aes.h>
+#define BLE_DEVICE_BASE_HAS_MBEDTLS_AES
+#endif
 
 #include <cstdio>
 #include <cstring>
@@ -151,6 +157,13 @@ uint64_t ESPBTDevice::address_uint64() const {
 }
 
 bool ESPBTDevice::resolve_irk(const uint8_t *irk) const {
+#ifndef BLE_DEVICE_BASE_HAS_MBEDTLS_AES
+  // No AES-128 (mbedtls) on this platform: cannot compute the RPA hash, so report "no
+  // match". Identity-resolving-key matching is unavailable; nothing else is affected
+  // (non-RPA addresses and all other advertisement parsing work normally).
+  (void) irk;
+  return false;
+#else
   // Bluetooth Core 5.x "ah" function: localHash = e(IRK, padding ‖ prand)[bottom 24 bits].
   // The resolvable private address (RPA) is prand (top 3 bytes) ‖ hash (bottom 3 bytes).
   // This mirrors esp32_ble_tracker::ESPBTDevice::resolve_irk exactly; address_uint64()
@@ -179,6 +192,7 @@ bool ESPBTDevice::resolve_irk(const uint8_t *irk) const {
   // Compare the AES output hash (bottom 24 bits) with the address hash bytes.
   return ecb_ciphertext[15] == (addr64 & 0xff) && ecb_ciphertext[14] == ((addr64 >> 8) & 0xff) &&
          ecb_ciphertext[13] == ((addr64 >> 16) & 0xff);
+#endif
 }
 
 void ESPBTDevice::parse_adv_(const uint8_t *payload, uint16_t len) {

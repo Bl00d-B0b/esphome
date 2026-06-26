@@ -68,6 +68,9 @@ CONF_LN882H_BLE_ID = "ln882h_ble_id"
 # LN882H-only component: requires the ln882x platform. Fail fast (clear config
 # error) instead of a cryptic link error against the LN BLE SDK on other targets.
 DEPENDENCIES = ["ln882x"]
+# The tracker's C++ uses the shared ble_device_base advertisement types (ESPBTDevice, …),
+# and BLE sensor components register through ble_device_base, so pull it into every build.
+AUTO_LOAD = ["ble_device_base"]
 CODEOWNERS = ["@Bl00d-B0b"]
 
 # BleProxyHub: the neutral hub interface (bluetooth_proxy) that the tracker
@@ -79,6 +82,19 @@ ln882h_ble_tracker_ns = cg.esphome_ns.namespace("ln882h_ble_tracker")
 LN882HBLETracker = ln882h_ble_tracker_ns.class_(
     "LN882HBLETracker", cg.Component, ble_proxy_hub
 )
+
+
+async def register_ble_device(var, config):
+    """Register `var` as a BLE-advertisement listener on this hub.
+
+    This is the ble_device_base hub contract: ble_device_base.register_ble_device()
+    dispatches here for the ln882x platform, and inject_ble_hub() has already filled
+    config[CONF_LN882H_BLE_ID] with the hub id (auto-resolved when a single hub exists).
+    """
+    paren = await cg.get_variable(config[CONF_LN882H_BLE_ID])
+    cg.add(paren.register_listener(var))
+    return var
+
 
 # NOTE: this component is the BLE scanner only. Local BLE sensor support
 # (ble_presence/ble_rssi/ble_scanner/bthome) and the Bluetooth proxy
