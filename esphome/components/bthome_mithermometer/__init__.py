@@ -1,13 +1,13 @@
 import esphome.codegen as cg
-from esphome.components import esp32_ble_tracker
+from esphome.components import ble_device_base, esp32_ble_tracker
 import esphome.config_validation as cv
 from esphome.const import CONF_BINDKEY, CONF_ID, CONF_MAC_ADDRESS
 from esphome.core import HexInt
 
 CODEOWNERS = ["@nagyrobi"]
-DEPENDENCIES = ["esp32_ble_tracker"]
+AUTO_LOAD = ["ble_device_base"]
 
-BLE_DEVICE_SCHEMA = esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA
+BLE_DEVICE_SCHEMA = ble_device_base.ble_device_schema()
 
 bthome_mithermometer_ns = cg.esphome_ns.namespace("bthome_mithermometer")
 BTHomeMiThermometer = bthome_mithermometer_ns.class_(
@@ -18,7 +18,7 @@ BTHomeMiThermometer = bthome_mithermometer_ns.class_(
 def bthome_mithermometer_base_schema(extra_schema=None):
     if extra_schema is None:
         extra_schema = {}
-    return (
+    return cv.All(
         cv.Schema(
             {
                 cv.GenerateID(CONF_ID): cv.declare_id(BTHomeMiThermometer),
@@ -28,13 +28,14 @@ def bthome_mithermometer_base_schema(extra_schema=None):
         )
         .extend(BLE_DEVICE_SCHEMA)
         .extend(cv.COMPONENT_SCHEMA)
-        .extend(extra_schema)
+        .extend(extra_schema),
+        ble_device_base.inject_ble_hub,
     )
 
 
 async def setup_bthome_mithermometer(var, config):
     await cg.register_component(var, config)
-    await esp32_ble_tracker.register_ble_device(var, config)
+    await ble_device_base.register_ble_device(var, config)
     cg.add(var.set_address(config[CONF_MAC_ADDRESS].as_hex))
     if bindkey := config.get(CONF_BINDKEY):
         bindkey_bytes = [
