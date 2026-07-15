@@ -106,7 +106,7 @@ void BLECharacteristic::do_create(BLEService *service) {
   ESP_LOGV(TAG, "Creating characteristic - %s", uuid_buf);
 #endif
 
-  esp_bt_uuid_t uuid = this->uuid_.get_uuid();
+  esp_bt_uuid_t uuid = esp32_ble::uuid_to_idf(this->uuid_);
   esp_err_t err = esp_ble_gatts_add_char(service->get_handle(), &uuid, static_cast<esp_gatt_perm_t>(this->permissions_),
                                          this->properties_, nullptr, &control);
 
@@ -174,7 +174,7 @@ void BLECharacteristic::gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt
                                             esp_ble_gatts_cb_param_t *param) {
   switch (event) {
     case ESP_GATTS_ADD_CHAR_EVT: {
-      if (this->uuid_ == ESPBTUUID::from_uuid(param->add_char.char_uuid)) {
+      if (this->uuid_ == esp32_ble::uuid_from_idf(param->add_char.char_uuid)) {
         this->handle_ = param->add_char.attr_handle;
 
         for (auto *descriptor : this->descriptors_) {

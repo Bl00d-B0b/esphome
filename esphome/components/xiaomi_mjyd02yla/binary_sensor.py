@@ -1,5 +1,5 @@
 import esphome.codegen as cg
-from esphome.components import binary_sensor, esp32_ble_tracker, sensor
+from esphome.components import binary_sensor, ble_device_base, sensor
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_BATTERY_LEVEL,
@@ -20,15 +20,14 @@ from esphome.const import (
     UNIT_PERCENT,
 )
 
-DEPENDENCIES = ["esp32_ble_tracker"]
-AUTO_LOAD = ["xiaomi_ble", "sensor"]
+AUTO_LOAD = ["ble_device_base", "xiaomi_ble", "sensor"]
 
 xiaomi_mjyd02yla_ns = cg.esphome_ns.namespace("xiaomi_mjyd02yla")
 XiaomiMJYD02YLA = xiaomi_mjyd02yla_ns.class_(
     "XiaomiMJYD02YLA",
     binary_sensor.BinarySensor,
     cg.Component,
-    esp32_ble_tracker.ESPBTDeviceListener,
+    ble_device_base.ESPBTDeviceListener,
 )
 
 CONFIG_SCHEMA = cv.All(
@@ -63,15 +62,15 @@ CONFIG_SCHEMA = cv.All(
             ),
         }
     )
-    .extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA)
-    .extend(cv.COMPONENT_SCHEMA)
+    .extend(cv.COMPONENT_SCHEMA),
+    ble_device_base.inject_ble_hub,
 )
 
 
 async def to_code(config):
     var = await binary_sensor.new_binary_sensor(config)
     await cg.register_component(var, config)
-    await esp32_ble_tracker.register_ble_device(var, config)
+    await ble_device_base.register_ble_device(var, config)
 
     cg.add(var.set_address(config[CONF_MAC_ADDRESS].as_hex))
     cg.add(var.set_bindkey(config[CONF_BINDKEY]))

@@ -106,7 +106,7 @@ bool BLEClientBase::parse_device(const espbt::ESPBTDevice &device) {
 
   this->set_state(espbt::ClientState::DISCOVERED);
   this->set_address(device.address_uint64());
-  this->remote_addr_type_ = device.get_address_type();
+  this->remote_addr_type_ = static_cast<esp_ble_addr_type_t>(device.get_address_type());
   return true;
 }
 #endif
@@ -433,7 +433,7 @@ bool BLEClientBase::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_
       }
 #ifdef USE_ESP32_BLE_DEVICE
       BLEService *ble_service = new BLEService();  // NOLINT(cppcoreguidelines-owning-memory)
-      ble_service->uuid = espbt::ESPBTUUID::from_uuid(param->search_res.srvc_id.uuid);
+      ble_service->uuid = espbt::uuid_from_idf(param->search_res.srvc_id.uuid);
       ble_service->start_handle = param->search_res.start_handle;
       ble_service->end_handle = param->search_res.end_handle;
       ble_service->client = this;
@@ -681,7 +681,8 @@ BLEDescriptor *BLEClientBase::get_config_descriptor(uint16_t handle) {
     if (!chr->parsed)
       chr->parse_descriptors();
     for (auto &desc : chr->descriptors) {
-      if (desc->uuid.get_uuid().uuid.uuid16 == ESP_GATT_UUID_CHAR_CLIENT_CONFIG)
+      if (desc->uuid.type() == espbt::ESPBTUUID::Type::UUID16 &&
+          desc->uuid.uuid16() == ESP_GATT_UUID_CHAR_CLIENT_CONFIG)
         return desc;
     }
   }

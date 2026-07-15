@@ -190,8 +190,8 @@ bool BedJetHub::discover_characteristics_() {
       ESP_LOGW(TAG, "No config descriptor for status handle 0x%x. Will not be able to receive status notifications",
                this->char_handle_status_);
       result = false;
-    } else if (descr->uuid.get_uuid().len != ESP_UUID_LEN_16 ||
-               descr->uuid.get_uuid().uuid.uuid16 != ESP_GATT_UUID_CHAR_CLIENT_CONFIG) {
+    } else if (descr->uuid.type() != espbt::ESPBTUUID::Type::UUID16 ||
+               descr->uuid.uuid16() != ESP_GATT_UUID_CHAR_CLIENT_CONFIG) {
       char uuid_buf[espbt::UUID_STR_LEN];
       ESP_LOGW(TAG, "Config descriptor 0x%x (uuid %s) is not a client config char uuid", this->char_handle_status_,
                descr->uuid.to_str(uuid_buf));

@@ -1,5 +1,5 @@
 import esphome.codegen as cg
-from esphome.components import esp32_ble_tracker, sensor
+from esphome.components import ble_device_base, sensor
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_BATTERY_LEVEL,
@@ -24,14 +24,14 @@ from esphome.const import (
 
 CODEOWNERS = ["@pasiz"]
 
-DEPENDENCIES = ["esp32_ble_tracker"]
+AUTO_LOAD = ["ble_device_base"]
 
 pvvx_mithermometer_ns = cg.esphome_ns.namespace("pvvx_mithermometer")
 PVVXMiThermometer = pvvx_mithermometer_ns.class_(
-    "PVVXMiThermometer", esp32_ble_tracker.ESPBTDeviceListener, cg.Component
+    "PVVXMiThermometer", ble_device_base.ESPBTDeviceListener, cg.Component
 )
 
-CONFIG_SCHEMA = (
+CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(PVVXMiThermometer),
@@ -70,16 +70,15 @@ CONFIG_SCHEMA = (
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             ),
         }
-    )
-    .extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA)
-    .extend(cv.COMPONENT_SCHEMA)
+    ).extend(cv.COMPONENT_SCHEMA),
+    ble_device_base.inject_ble_hub,
 )
 
 
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
-    await esp32_ble_tracker.register_ble_device(var, config)
+    await ble_device_base.register_ble_device(var, config)
 
     cg.add(var.set_address(config[CONF_MAC_ADDRESS].as_hex))
 

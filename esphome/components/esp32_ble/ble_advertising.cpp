@@ -80,7 +80,7 @@ esp_err_t BLEAdvertising::services_advertisement_() {
     uint8_t *p = this->advertising_data_.p_service_uuid;
     for (int i = 0; i < num_services; i++) {
       ESPBTUUID uuid = this->advertising_uuids_[i];
-      memcpy(p, uuid.as_128bit().get_uuid().uuid.uuid128, 16);
+      memcpy(p, uuid.as_128bit().uuid128(), 16);
       p += 16;
     }
   }

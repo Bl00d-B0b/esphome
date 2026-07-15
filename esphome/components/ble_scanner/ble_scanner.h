@@ -5,18 +5,18 @@
 #include <ctime>
 
 #include "esphome/core/component.h"
-#include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
+#include "esphome/components/ble_device_base/ble_device.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 
-#ifdef USE_ESP32
-
+// No platform #ifdef: ble_device_base/ble_device.h provides the ESPBTDevice/Listener
+// types on every platform, and ble_scanner is
+// only ever compiled when configured — which requires a BLE hub via ble_device_base, so
+// it builds on ESP32, BK72xx, LN882H and any future BLE platform without a per-chip guard.
 namespace esphome::ble_scanner {
 
-class BLEScanner final : public text_sensor::TextSensor,
-                         public esp32_ble_tracker::ESPBTDeviceListener,
-                         public Component {
+class BLEScanner final : public text_sensor::TextSensor, public ble_device_base::ESPBTDeviceListener, public Component {
  public:
-  bool parse_device(const esp32_ble_tracker::ESPBTDevice &device) override {
+  bool parse_device(const ble_device_base::ESPBTDevice &device) override {
     char addr_buf[MAC_ADDRESS_PRETTY_BUFFER_SIZE];
     // Escape special characters in the device name for valid JSON
     const char *name = device.get_name().c_str();
@@ -45,5 +45,3 @@ class BLEScanner final : public text_sensor::TextSensor,
 };
 
 }  // namespace esphome::ble_scanner
-
-#endif

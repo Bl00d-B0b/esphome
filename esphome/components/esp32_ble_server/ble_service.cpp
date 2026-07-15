@@ -46,7 +46,7 @@ void BLEService::do_create(BLEServer *server) {
   esp_gatt_srvc_id_t srvc_id;
   srvc_id.is_primary = true;
   srvc_id.id.inst_id = this->inst_id_;
-  srvc_id.id.uuid = this->uuid_.get_uuid();
+  srvc_id.id.uuid = esp32_ble::uuid_to_idf(this->uuid_);
 
   esp_err_t err = esp_ble_gatts_create_service(server->get_gatts_if(), &srvc_id, this->num_handles_);
   if (err != ESP_OK) {
@@ -137,7 +137,7 @@ void BLEService::gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t g
                                      esp_ble_gatts_cb_param_t *param) {
   switch (event) {
     case ESP_GATTS_CREATE_EVT: {
-      if (this->uuid_ == ESPBTUUID::from_uuid(param->create.service_id.id.uuid) &&
+      if (this->uuid_ == esp32_ble::uuid_from_idf(param->create.service_id.id.uuid) &&
           this->inst_id_ == param->create.service_id.id.inst_id) {
         this->handle_ = param->create.service_handle;
         this->state_ = CREATED;

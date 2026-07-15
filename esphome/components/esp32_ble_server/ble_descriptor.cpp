@@ -38,7 +38,7 @@ void BLEDescriptor::do_create(BLECharacteristic *characteristic) {
   this->uuid_.to_str(uuid_buf);
   ESP_LOGV(TAG, "Creating descriptor - %s", uuid_buf);
 #endif
-  esp_bt_uuid_t uuid = this->uuid_.get_uuid();
+  esp_bt_uuid_t uuid = esp32_ble::uuid_to_idf(this->uuid_);
   esp_err_t err = esp_ble_gatts_add_char_descr(this->characteristic_->get_service()->get_handle(), &uuid,
                                                this->permissions_, &this->value_, &control);
   if (err != ESP_OK) {
@@ -66,7 +66,8 @@ void BLEDescriptor::gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
                                         esp_ble_gatts_cb_param_t *param) {
   switch (event) {
     case ESP_GATTS_ADD_CHAR_DESCR_EVT: {
-      if (this->characteristic_ != nullptr && this->uuid_ == ESPBTUUID::from_uuid(param->add_char_descr.descr_uuid) &&
+      if (this->characteristic_ != nullptr &&
+          this->uuid_ == esp32_ble::uuid_from_idf(param->add_char_descr.descr_uuid) &&
           this->characteristic_->get_service()->get_handle() == param->add_char_descr.service_handle &&
           this->characteristic_ == this->characteristic_->get_service()->get_last_created_characteristic()) {
         this->handle_ = param->add_char_descr.attr_handle;

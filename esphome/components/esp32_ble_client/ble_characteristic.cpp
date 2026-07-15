@@ -46,7 +46,7 @@ void BLECharacteristic::parse_descriptors() {
     }
 
     BLEDescriptor *desc = new BLEDescriptor();  // NOLINT(cppcoreguidelines-owning-memory)
-    desc->uuid = espbt::ESPBTUUID::from_uuid(result.uuid);
+    desc->uuid = espbt::uuid_from_idf(result.uuid);
     desc->handle = result.handle;
     desc->characteristic = this;
     this->descriptors.push_back(desc);

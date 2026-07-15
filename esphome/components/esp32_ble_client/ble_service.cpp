@@ -59,7 +59,7 @@ void BLEService::parse_characteristics() {
     }
 
     BLECharacteristic *characteristic = new BLECharacteristic();  // NOLINT(cppcoreguidelines-owning-memory)
-    characteristic->uuid = espbt::ESPBTUUID::from_uuid(result.uuid);
+    characteristic->uuid = espbt::uuid_from_idf(result.uuid);
     characteristic->properties = result.properties;
     characteristic->handle = result.char_handle;
     characteristic->service = this;
