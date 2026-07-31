@@ -1,0 +1,2 @@
+packages:
+  xiaomi_hhccjcy10: !include common.yaml
