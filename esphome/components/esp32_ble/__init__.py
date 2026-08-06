@@ -576,7 +576,13 @@ async def to_code(config):
     max_connections = config.get(CONF_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS)
     cg.add_define("USE_ESP32_BLE_MAX_CONNECTIONS", max_connections)
 
-    request_bluetooth(ble_42=True)
+    # 2026.7.4 backported esphome#18047: request_bluetooth() lost the ble_42
+    # kwarg (the core now always sets 4.2 on / 5.0 off when BT is requested).
+    # Overlay must span addon versions on both sides of that change.
+    try:
+        request_bluetooth(ble_42=True)
+    except TypeError:
+        request_bluetooth()
 
     # When PSRAM and BT are used together, Bluedroid should prefer SPIRAM for
     # heap allocations and use dynamic (heap-based) environment memory tables
