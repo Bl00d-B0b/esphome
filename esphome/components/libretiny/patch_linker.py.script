@@ -18,6 +18,9 @@ import subprocess
 #   .ram_image2.text in sections_ram, so code there is silently dropped from
 #   the flashed image. Inject KEEP(*(.sram.text*)) at the top of
 #   .ram_image2.data (which IS extracted) instead.
+# - RTL8720D: stock linker collects *(.image2.ram.text*) into .ram_image2.text
+#   but has no glob for ".sram.text". Unlike AmebaZ, the AmebaD image packer
+#   does extract .ram_image2.text, so the KEEP goes there.
 # - LN882H: stock linker has no glob for ".sram.text", so we inject
 #   KEEP(*(.sram.text*)) into ".flash_copysection" (> RAM0 AT> FLASH)
 #   immediately after KEEP(*(.vectors)), so the vector table stays at
@@ -54,6 +57,12 @@ _LN_COPY = re.compile(r"(KEEP\(\*\(\.vectors\)\)[^\n]*\n)")
 # rather than silently shipping a binary with IRAM_ATTR code dropped from
 # one or both OTA slots.
 _AMBZ_DATA = re.compile(r"(\.ram_image2\.data\s*:\s*\n?\s*\{\s*\n)")
+# AmebaD: .ram_image2.text is extracted into the KM4 RAM image, so IRAM_ATTR
+# code placed there reaches the device.
+# Unlike _AMBZ_DATA, no CI compile job covers this regex yet (no released
+# framework carries realtek-ambd) - a future AmebaD linker-template change is
+# caught only by local builds until that lands.
+_AMBD_TEXT = re.compile(r"(\.ram_image2\.text\s*:\s*\n?\s*\{\s*\n)")
 
 
 def _detect(env):
@@ -78,6 +87,7 @@ KNOWN_VARIANTS = frozenset({
     "LN882H",
     "RTL8710B",
     "RTL8720C",
+    "RTL8720D",
 })
 
 
@@ -96,6 +106,7 @@ def _inject_keep(host_section):
 _PATCHERS_BY_VARIANT = {
     "LN882H": (_inject_keep(_LN_COPY),),
     "RTL8710B": (_inject_keep(_AMBZ_DATA),),
+    "RTL8720D": (_inject_keep(_AMBD_TEXT),),
 }
 
 
