@@ -513,8 +513,9 @@
 #define USE_LN882H_BLE
 #define LN882H_BLE_SCAN_LISTENER_COUNT 1
 // One tracker arm per build: ln882x gets its real hub; bk72xx also stands in
-// for hub-less LibreTiny chips (rtl87xx) so bluetooth_proxy.h has a BLEHub
-// to parse against.
+// for the LibreTiny chips whose own hub cannot be parsed here (rtl87xx's
+// controller needs the AmebaD SDK headers, absent for static analysis) so
+// bluetooth_proxy.h has a BLEHub to parse against.
 #ifdef USE_LN882X
 #define USE_LN882H_BLE_TRACKER
 #else
