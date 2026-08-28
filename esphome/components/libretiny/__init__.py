@@ -303,7 +303,16 @@ FRAMEWORK_SCHEMA = cv.All(
     _check_debug_order,
 )
 
-CONFIG_SCHEMA = cv.All(_notify_old_style, cv.require_platformio_toolchain("LibreTiny"))
+# PROD SHIM (remove when the addon ships a release with
+# cv.require_platformio_toolchain; it landed in dev after 2026.8.1): fall back
+# to a no-op validator on older cores.
+def _require_lt_toolchain():
+    if hasattr(cv, "require_platformio_toolchain"):
+        return cv.require_platformio_toolchain("LibreTiny")
+    return lambda value: value
+
+
+CONFIG_SCHEMA = cv.All(_notify_old_style, _require_lt_toolchain())
 
 BASE_SCHEMA = cv.Schema(
     {
@@ -368,7 +377,7 @@ def _check_rtl8720d_framework(config: ConfigType) -> ConfigType:
 
 
 BASE_SCHEMA.add_extra(_detect_variant)
-BASE_SCHEMA.add_extra(cv.require_platformio_toolchain("LibreTiny"))
+BASE_SCHEMA.add_extra(_require_lt_toolchain())  # PROD SHIM, see above
 BASE_SCHEMA.add_extra(_check_rtl8720d_framework)
 BASE_SCHEMA.add_extra(_update_core_data)
 
