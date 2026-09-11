@@ -912,8 +912,8 @@ class WiFiComponent final : public Component {
 
   // Post-connect roaming constants
   static constexpr uint32_t ROAMING_CHECK_INTERVAL = 5 * 60 * 1000;  // 5 minutes
-  static constexpr int8_t ROAMING_MIN_IMPROVEMENT = -20;  // stress: roam to a weaker same-SSID AP so every check changes BSSID
-  static constexpr int8_t ROAMING_GOOD_RSSI = -49;                   // Skip scan if signal is excellent
+  static constexpr int8_t ROAMING_MIN_IMPROVEMENT = -127;  // stress: always roam to the strongest OTHER same-SSID AP
+  static constexpr int8_t ROAMING_GOOD_RSSI = 127;  // stress: never skip the check for "signal good"
   static constexpr uint8_t ROAMING_MAX_ATTEMPTS = 3;
   // Grace period after roaming scan completes. If WiFi disconnects within this
   // window (e.g., ESP8266 Beacon Timeout caused by going off-channel during scan),
