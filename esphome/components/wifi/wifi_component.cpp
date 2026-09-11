@@ -2552,6 +2552,8 @@ void WiFiComponent::process_roaming_scan_() {
     // Must be same SSID, different BSSID
     if (result.ssid_ != current_ssid || result.get_bssid() == current_bssid)
       continue;
+    if (result.get_rssi() < -70)  // stress: only switch to APs that can actually hold the link
+      continue;
 
 #if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
     format_mac_addr_upper(result.get_bssid().data(), bssid_buf);
