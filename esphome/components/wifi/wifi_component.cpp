@@ -2552,8 +2552,17 @@ void WiFiComponent::process_roaming_scan_() {
     // Must be same SSID, different BSSID
     if (result.ssid_ != current_ssid || result.get_bssid() == current_bssid)
       continue;
-    if (result.get_rssi() < -70)  // stress: only switch to APs that can actually hold the link
-      continue;
+    {  // stress: only switch between the three known-good 2.4 GHz APs (RSSI is unreliable with BLE down)
+      static const bssid_t STRESS_TARGETS[] = {{0xC6, 0xAD, 0x34, 0xB2, 0x0C, 0xC1},
+                                               {0x76, 0x4D, 0x28, 0x0C, 0xF7, 0x09},
+                                               {0x76, 0x4D, 0x28, 0x0C, 0xF7, 0x10}};
+      bool allowed = false;
+      for (const auto &t : STRESS_TARGETS)
+        if (result.get_bssid() == t)
+          allowed = true;
+      if (!allowed)
+        continue;
+    }
 
 #if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
     format_mac_addr_upper(result.get_bssid().data(), bssid_buf);
