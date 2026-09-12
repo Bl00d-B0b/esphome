@@ -2578,7 +2578,8 @@ void WiFiComponent::process_roaming_scan_() {
   // Check if best candidate meets minimum improvement threshold
   const WiFiAP *selected = this->get_selected_sta_();
   int8_t improvement = (best == nullptr) ? 0 : best->get_rssi() - current_rssi;
-  if (selected == nullptr || improvement < ROAMING_MIN_IMPROVEMENT) {
+  // stress: the improvement gate is disabled, so a scan without an eligible candidate must return here
+  if (best == nullptr || selected == nullptr || improvement < ROAMING_MIN_IMPROVEMENT) {
     ESP_LOGV(TAG, "Roam best %+d dB (need +%d), attempt %u/%u", improvement, ROAMING_MIN_IMPROVEMENT,
              this->roaming_attempts_, ROAMING_MAX_ATTEMPTS);
     this->release_scan_results_();
