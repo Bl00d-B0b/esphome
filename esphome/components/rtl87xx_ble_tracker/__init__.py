@@ -181,7 +181,9 @@ async def start_scan_action_to_code(
     return var
 
 
-automation.register_parented_action(
+# PROD SHIM (addon core 2026.9.0 predates automation.register_parented_action,
+# esphome#19321; the PR branch uses the helper): explicit parented builder.
+@automation.register_action(
     "rtl87xx_ble_tracker.stop_scan",
     StopScanAction,
     automation.maybe_simple_id(
@@ -189,3 +191,12 @@ automation.register_parented_action(
     ),
     synchronous=True,
 )
+async def stop_scan_action_to_code(
+    config: ConfigType,
+    action_id: ID,
+    template_arg: cg.TemplateArguments,
+    args: list,
+) -> cg.MockObj:
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
