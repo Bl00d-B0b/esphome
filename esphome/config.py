@@ -234,6 +234,56 @@ def _resolve_component_aliases(config: dict[str, Any]) -> None:
     config.update(rewritten)
 
 
+def _migrate_legacy_platforms(config: dict[str, Any], result: Config) -> None:
+    """Let deprecated platforms rewrite their raw entries before validation.
+
+    A platform module may define ``LEGACY_PLATFORM_MIGRATE(entry, config)``
+    (see :attr:`ComponentManifest.legacy_platform_migrate`); each of its
+    entries is replaced by what the hook returns, and the hook may add to
+    other top-level keys of ``config``. Only lists holding at least one
+    ``platform:`` tagged entry are inspected, so no component is imported
+    for a key that cannot hold platforms. A ``cv.Invalid`` from the hook is
+    reported at the entry, under its platform. Removable deprecation shim hook.
+    """
+    for domain, entries in list(config.items()):
+        if (
+            not isinstance(domain, str)
+            or not isinstance(entries, list)
+            or not any(
+                isinstance(entry, dict) and CONF_PLATFORM in entry for entry in entries
+            )
+        ):
+            continue
+        component = get_component(domain)
+        if component is None or not component.is_platform_component:
+            continue
+        migrated: list[Any] = []
+        changed = False
+        for index, entry in enumerate(entries):
+            platform_name = (
+                entry.get(CONF_PLATFORM) if isinstance(entry, dict) else None
+            )
+            platform = (
+                get_platform(domain, platform_name)
+                if isinstance(platform_name, str)
+                else None
+            )
+            migrate = platform.legacy_platform_migrate if platform else None
+            if migrate is None:
+                migrated.append(entry)
+                continue
+            with CORE.component_context(f"{domain}.{platform_name}"):
+                try:
+                    migrated.extend(migrate(entry, config))
+                except vol.Invalid as err:
+                    result.add_output_path([domain, index], f"{domain}.{platform_name}")
+                    err.prepend([domain, index])
+                    raise
+            changed = True
+        if changed:
+            config[domain] = migrated
+
+
 @functools.total_ordering
 class _ValidationStepTask:
     def __init__(self, priority: float, id_number: int, step: ConfigValidationStep):
@@ -1357,6 +1407,15 @@ def validate_config(
             result.update(config)
             result.add_error(err)
             return result
+
+    # 1.4. Deprecated platforms rewrite their raw entries into their
+    # replacement's config (LEGACY_PLATFORM_MIGRATE); mutates `config` in place.
+    try:
+        _migrate_legacy_platforms(config, result)
+    except vol.Invalid as err:
+        result.update(config)
+        result.add_error(err)
+        return result
 
     if "esphomeyaml" in config:
         _LOGGER.warning(

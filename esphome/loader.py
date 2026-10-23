@@ -165,6 +165,20 @@ class ComponentManifest:
         return getattr(self.module, "LEGACY_CONFIG_MIGRATE", None)
 
     @property
+    def legacy_platform_migrate(
+        self,
+    ) -> Callable[[ConfigType, dict[str, Any]], list[ConfigType]] | None:
+        """Optional `LEGACY_PLATFORM_MIGRATE` callable on a platform module.
+
+        Called from the raw-config pre-pass with one `platform:` entry of this
+        platform and the whole raw config. Returns the entries that replace it in
+        its own domain; it may add to other top-level keys of the config (the
+        component that supersedes the platform). This is an intentionally
+        removable deprecation shim hook.
+        """
+        return getattr(self.module, "LEGACY_PLATFORM_MIGRATE", None)
+
+    @property
     def expand_platform_config(
         self,
     ) -> Callable[[list[ConfigType]], list[ConfigType]] | None:

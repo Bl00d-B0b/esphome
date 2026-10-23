@@ -1,0 +1,44 @@
+esphome:
+  name: test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+esp32_ble_tracker:
+
+sensor:
+  - platform: bthome
+    source_id: bthome_mithermometer_a4c1384e1678
+    type: TEMPERATURE_C_E2
+    name: Temperature
+  - platform: bthome
+    source_id: bthome_mithermometer_a4c1384e1678
+    type: HUMIDITY_PCT_E2
+    name: Humidity
+    accuracy_decimals: 1
+  - platform: bthome
+    source_id: bthome_mithermometer_a4c1384e1678
+    type: BATTERY_PCT
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    name: Battery
+  - platform: bthome
+    source_id: bthome_mithermometer_a4c1384e1678
+    type: VOLTAGE_V_E3
+    accuracy_decimals: 3
+    icon: mdi:battery-plus
+    entity_category: diagnostic
+    name: Battery Voltage
+  - platform: bthome
+    source_id: bthome_mithermometer_a4c1384e1678
+    type: SIGNAL_STRENGTH
+    entity_category: diagnostic
+    name: Signal
+
+bthome:
+  remote_devices:
+    - id: bthome_mithermometer_a4c1384e1678
+      mac_address: A4:C1:38:4E:16:78
+      key: EEF418DAF699A0C188F3BFD17E4565D9

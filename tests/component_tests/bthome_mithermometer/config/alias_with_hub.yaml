@@ -1,0 +1,29 @@
+esphome:
+  name: test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+esp32_ble_tracker:
+  id: tracker
+
+bthome:
+  ble_hub_id: tracker
+  remote_devices:
+    - id: plant
+      mac_address: 11:22:33:44:55:66
+
+sensor:
+  - platform: bthome
+    source_id: plant
+    type: MOISTURE
+    name: Moisture
+  # The legacy entry joins the hub above as its second remote device.
+  - platform: bthome_mithermometer
+    id: thermometer
+    ble_hub_id: tracker
+    mac_address: A4:C1:38:4E:16:78
+    temperature:
+      name: Temperature

@@ -200,6 +200,97 @@ def test_legacy_migrate_skipped_for_autoload() -> None:
 
 
 # ---------------------------------------------------------------------------
+# LEGACY_PLATFORM_MIGRATE pre-pass (_migrate_legacy_platforms) -- the removable
+# shim that lets a deprecated platform rewrite its raw entries before loading.
+# ---------------------------------------------------------------------------
+
+
+def _run_platform_migrate(
+    raw: dict,
+    migrate: Callable[[ConfigType, dict], list] | None,
+    *,
+    platform_found: bool = True,
+    result: config.Config | None = None,
+) -> tuple[Mock, Mock]:
+    """Run the pre-pass; only the platform named "old" carries the hook."""
+    old = Mock()
+    old.legacy_platform_migrate = migrate
+    other = Mock()
+    other.legacy_platform_migrate = None
+    component = Mock()
+    component.is_platform_component = True
+
+    def get_platform(domain: str, name: str) -> Mock | None:
+        if not platform_found:
+            return None
+        return old if name == "old" else other
+
+    with (
+        patch("esphome.config.get_component", return_value=component) as get_comp,
+        patch("esphome.config.get_platform", side_effect=get_platform) as get_plat,
+    ):
+        config._migrate_legacy_platforms(
+            raw, result if result is not None else config.Config()
+        )
+    return get_comp, get_plat
+
+
+def test_platform_migrate_replaces_entry_and_adds_domain() -> None:
+    """The hook's entries replace the legacy one; it may add a top-level key."""
+
+    def migrate(entry: ConfigType, raw: dict) -> list:
+        raw["hub"] = {"devices": [entry["mac"]]}
+        return [{"platform": "new", "source": entry["mac"]}]
+
+    raw = {
+        "esphome": {"name": "x"},
+        "sensor": [{"platform": "keep"}, {"platform": "old", "mac": "AA"}],
+    }
+    _run_platform_migrate(raw, migrate)
+
+    assert raw["sensor"] == [{"platform": "keep"}, {"platform": "new", "source": "AA"}]
+    assert raw["hub"] == {"devices": ["AA"]}
+
+
+def test_platform_migrate_absent_hook_is_noop() -> None:
+    raw = {"sensor": [{"platform": "old", "mac": "AA"}]}
+    _run_platform_migrate(raw, None)
+    assert raw == {"sensor": [{"platform": "old", "mac": "AA"}]}
+
+
+def test_platform_migrate_unknown_platform_is_left_for_validation() -> None:
+    raw = {"sensor": [{"platform": "typo"}]}
+    _run_platform_migrate(raw, Mock(), platform_found=False)
+    assert raw == {"sensor": [{"platform": "typo"}]}
+
+
+def test_platform_migrate_skips_keys_without_platform_entries() -> None:
+    """Nothing is imported for keys that cannot hold platform entries."""
+    raw = {"esphome": {"name": "x"}, "uart": [{"tx_pin": 1}], "sensor": "bad"}
+    get_comp, get_plat = _run_platform_migrate(raw, Mock())
+    get_comp.assert_not_called()
+    get_plat.assert_not_called()
+    assert raw == {"esphome": {"name": "x"}, "uart": [{"tx_pin": 1}], "sensor": "bad"}
+
+
+def test_platform_migrate_invalid_is_reported_at_the_entry() -> None:
+    """A hook error gets the entry's path and the entry becomes an output path."""
+
+    def migrate(entry: ConfigType, raw: dict) -> list:
+        raise cv.Invalid("bad key", path=["mac"])
+
+    result = config.Config()
+    with pytest.raises(cv.Invalid) as err:
+        _run_platform_migrate(
+            {"sensor": [{"platform": "ok"}, {"platform": "old"}]},
+            migrate,
+            result=result,
+        )
+    assert err.value.path == ["sensor", 1, "mac"]
+    assert result.output_paths == [(["sensor", 1], "sensor.old")]
+
+
+# ---------------------------------------------------------------------------
 # EXPAND_PLATFORM_CONFIG hook on LoadValidationStep -- permanent counterpart
 # to legacy_config_migrate; runs after legacy migration/list normalization.
 # ---------------------------------------------------------------------------
