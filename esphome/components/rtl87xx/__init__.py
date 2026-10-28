@@ -29,8 +29,15 @@ from esphome.components.libretiny.const import (
 )
 from esphome.core import CORE
 from esphome.cpp_generator import MockObj
-from esphome.stacktrace import process_crash_handler_line as process_stacktrace  # noqa: F401
 from esphome.types import ConfigType
+
+try:
+    # 2026.11 core; the 2026.10.1 addon core has no LibreTiny crash decoder
+    from esphome.stacktrace import (  # noqa: F401
+        process_crash_handler_line as process_stacktrace,
+    )
+except ImportError:
+    pass
 
 from .boards import RTL87XX_BOARD_PINS, RTL87XX_BOARDS
 
