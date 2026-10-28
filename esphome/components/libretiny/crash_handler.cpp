@@ -67,6 +67,9 @@ extern char __flash_text_start__[];
 extern char __flash_text_end__[];
 extern char __ram_image2_text_start__[];
 extern char __ram_text_end__[];
+// The KM4 ROM keeps VTOR on its own table (ROM, read-only); its fault entries continue through this RAM table
+// (rtl8721d_vector.h), where app_start.c installs the SDK's INT_*_Patch handlers.
+extern void (*NewVectorTable[])();
 }
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp,readability-identifier-naming)
 #endif  // USE_LIBRETINY_VARIANT_RTL8720D
@@ -294,10 +297,11 @@ extern "C" void __wrap_bk_trap_dabt(arm_registers *regs) {
 
 #ifdef USE_LIBRETINY_CRASH_HANDLER_VECTOR_PATCH
 
-// The SDK's RAM vector table (VTOR) points the fault vectors at a handler that prints a register dump and then
-// spins: a ROM handler on the RTL8720C, CmBacktrace (hal_interrupt.c) on the LN882H, LibreTiny's fault dump
-// (fault_dump.c) on the RTL8720D. crash_handler_install() puts esphome_fault_entry() in front of it, as the
-// RTL8720C SDK's own CONFIG_MIIO patch (app_start.c) does.
+// The SDK's RAM vector table (VTOR, or NewVectorTable on the RTL8720D) points the fault vectors at a handler
+// that prints a register dump and then spins or resets: a ROM handler on the RTL8720C, CmBacktrace
+// (hal_interrupt.c) on the LN882H, INT_HardFault_Patch (app_start.c, ota_platform_reset()) on the RTL8720D.
+// crash_handler_install() puts esphome_fault_entry() in front of it, as the RTL8720C SDK's own CONFIG_MIIO patch
+// (app_start.c) does.
 static_assert(LT_HW_WATCHDOG, "the crash reboot relies on the hardware watchdog");
 // The RTL8720C ROM dump takes about 0.4 s at 115200 baud; without the re-arm the reset waits for the 10 s
 // watchdog from arch_init().
@@ -404,7 +408,11 @@ extern "C" __attribute__((naked, used)) void esphome_fault_entry() {
 }
 
 void crash_handler_install() {
+#ifdef USE_LIBRETINY_VARIANT_RTL8720D
+  auto *vectors = (uint32_t *) NewVectorTable;
+#else
   auto *vectors = (uint32_t *) read_reg(SCB_VTOR);  // NOLINT(performance-no-int-to-ptr)
+#endif
   for (uint32_t i = 0; i < FAULT_VECTOR_COUNT; i++) {
     s_sdk_fault_vectors[i] = vectors[FIRST_FAULT_VECTOR + i];
     vectors[FIRST_FAULT_VECTOR + i] = (uint32_t) &esphome_fault_entry;
