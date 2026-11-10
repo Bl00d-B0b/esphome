@@ -49,7 +49,7 @@ static bool network_is_connected() {
 }
 
 void Tuya::setup() {
-  this->set_interval("heartbeat", 15000, [this] { this->send_empty_command_(TuyaCommandType::HEARTBEAT); });
+  this->set_heartbeat_interval_(this->init_heartbeat_interval_);
   if (this->status_pin_ != nullptr) {
     this->status_pin_->digital_write(false);
   }
@@ -82,6 +82,10 @@ void Tuya::loop() {
     }
   }
   process_command_queue_();
+}
+
+void Tuya::set_heartbeat_interval_(uint32_t interval) {
+  this->set_interval("heartbeat", interval, [this] { this->send_empty_command_(TuyaCommandType::HEARTBEAT); });
 }
 
 void Tuya::dump_config() {
@@ -120,6 +124,8 @@ void Tuya::dump_config() {
                   this->reset_pin_reported_);
   }
   LOG_PIN("  Status Pin: ", this->status_pin_);
+  ESP_LOGCONFIG(TAG, "  Heartbeat: every %" PRIu32 " ms, every %" PRIu32 " ms until the working mode reply",
+                this->heartbeat_interval_, this->init_heartbeat_interval_);
 #ifdef USE_TUYA_MCU_RECOVERY
   if (this->recovery_missed_heartbeats_ != 0) {
     ESP_LOGCONFIG(TAG, "  MCU Recovery: %s after %u unanswered heartbeats",
@@ -250,6 +256,10 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
       if (buffer[0] == 0) {
         ESP_LOGI(TAG, "MCU restarted");
         this->init_state_ = TuyaInitState::INIT_HEARTBEAT;
+        if (!this->init_heartbeat_) {
+          this->init_heartbeat_ = true;
+          this->set_heartbeat_interval_(this->init_heartbeat_interval_);
+        }
         // the MCU enables the weather service again after a restart
         this->weather_enabled_ = false;
         this->weather_keys_.clear();
@@ -284,6 +294,11 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
       if (len >= 2) {
         this->status_pin_reported_ = buffer[0];
         this->reset_pin_reported_ = buffer[1];
+      }
+      // Tuya's module firmware goes to the normal heartbeat interval with this reply
+      if (this->init_heartbeat_) {
+        this->init_heartbeat_ = false;
+        this->set_heartbeat_interval_(this->heartbeat_interval_);
       }
       if (this->init_state_ == TuyaInitState::INIT_CONF) {
         // If mcu returned status gpio, then we can omit sending wifi state

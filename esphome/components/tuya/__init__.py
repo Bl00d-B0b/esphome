@@ -32,6 +32,8 @@ CONF_IGNORE_MCU_UPDATE_ON_DATAPOINTS = "ignore_mcu_update_on_datapoints"
 CONF_ON_DATAPOINT_UPDATE = "on_datapoint_update"
 CONF_DATAPOINT_TYPE = "datapoint_type"
 CONF_STATUS_PIN = "status_pin"
+CONF_HEARTBEAT_INTERVAL = "heartbeat_interval"
+CONF_INIT_HEARTBEAT_INTERVAL = "init_heartbeat_interval"
 CONF_MCU_RECOVERY = "mcu_recovery"
 CONF_MISSED_HEARTBEATS = "missed_heartbeats"
 CONF_BREAK_TIME = "break_time"
@@ -239,6 +241,14 @@ CONFIG_SCHEMA = (
                 cv.uint8_t
             ),
             cv.Optional(CONF_STATUS_PIN): pins.gpio_output_pin_schema,
+            cv.Optional(CONF_HEARTBEAT_INTERVAL, default="15s"): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(min=cv.TimePeriod(seconds=1), max=cv.TimePeriod(seconds=60)),
+            ),
+            cv.Optional(CONF_INIT_HEARTBEAT_INTERVAL, default="3s"): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(min=cv.TimePeriod(seconds=1), max=cv.TimePeriod(seconds=60)),
+            ),
             cv.Optional(CONF_MCU_RECOVERY): cv.All(
                 cv.Schema(
                     {
@@ -340,6 +350,12 @@ async def to_code(config):
     if CONF_STATUS_PIN in config:
         status_pin_ = await cg.gpio_pin_expression(config[CONF_STATUS_PIN])
         cg.add(var.set_status_pin(status_pin_))
+    cg.add(
+        var.set_heartbeat_interval(
+            config[CONF_HEARTBEAT_INTERVAL].total_milliseconds,
+            config[CONF_INIT_HEARTBEAT_INTERVAL].total_milliseconds,
+        )
+    )
     if (recovery := config.get(CONF_MCU_RECOVERY)) is not None:
         cg.add_define("USE_TUYA_MCU_RECOVERY")
         cg.add(var.set_mcu_recovery(recovery[CONF_MISSED_HEARTBEATS]))

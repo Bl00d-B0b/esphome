@@ -132,6 +132,10 @@ class Tuya final : public Component, public uart::UARTDevice {
   template<typename F> void add_on_initialized_callback(F &&callback) {
     this->initialized_callback_.add(std::forward<F>(callback));
   }
+  void set_heartbeat_interval(uint32_t interval, uint32_t init_interval) {
+    this->heartbeat_interval_ = interval;
+    this->init_heartbeat_interval_ = init_interval;
+  }
 #ifdef USE_TUYA_MCU_RECOVERY
   void set_mcu_recovery(uint8_t missed_heartbeats) { this->recovery_missed_heartbeats_ = missed_heartbeats; }
 #endif
@@ -190,6 +194,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   void set_raw_datapoint_value_(uint8_t datapoint_id, const std::vector<uint8_t> &value, bool forced);
   void send_datapoint_command_(uint8_t datapoint_id, TuyaDatapointType datapoint_type, std::vector<uint8_t> data);
   void set_status_pin_();
+  void set_heartbeat_interval_(uint32_t interval);
   void send_wifi_status_();
   uint8_t get_wifi_status_code_();
   uint8_t get_wifi_rssi_();
@@ -226,6 +231,10 @@ class Tuya final : public Component, public uart::UARTDevice {
   int reset_pin_reported_ = -1;
   uint32_t last_command_timestamp_ = 0;
   uint32_t last_rx_char_timestamp_ = 0;
+  uint32_t heartbeat_interval_{15000};
+  // used until the MCU answers the working mode query
+  uint32_t init_heartbeat_interval_{3000};
+  bool init_heartbeat_{true};
   std::string product_;
   std::vector<TuyaDatapointListener> listeners_;
   std::vector<TuyaDatapoint> datapoints_;
