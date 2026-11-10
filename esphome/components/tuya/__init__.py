@@ -1,6 +1,10 @@
+import re
+
 from esphome import automation, pins
 import esphome.codegen as cg
 from esphome.components import time, uart
+from esphome.components.sensor import Sensor
+from esphome.components.text_sensor import TextSensor
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ACTION,
@@ -11,6 +15,7 @@ from esphome.const import (
     CONF_TRIGGER_ID,
     CONF_TX_PIN,
     CONF_UART_ID,
+    CONF_UPDATE_INTERVAL,
     PLATFORM_BK72XX,
     PLATFORM_ESP32,
     PLATFORM_ESP8266,
@@ -30,6 +35,8 @@ CONF_STATUS_PIN = "status_pin"
 CONF_MCU_RECOVERY = "mcu_recovery"
 CONF_MISSED_HEARTBEATS = "missed_heartbeats"
 CONF_BREAK_TIME = "break_time"
+CONF_WEATHER = "weather"
+CONF_ON_WEATHER_REQUEST = "on_weather_request"
 
 ACTION_REBOOT = "reboot"
 ACTION_BREAK = "break"
@@ -44,6 +51,69 @@ BREAK_PLATFORMS = [
 tuya_ns = cg.esphome_ns.namespace("tuya")
 TuyaDatapointType = tuya_ns.enum("TuyaDatapointType", is_class=True)
 Tuya = tuya_ns.class_("Tuya", cg.Component, uart.UARTDevice)
+TuyaWeatherRequestTrigger = tuya_ns.class_(
+    "TuyaWeatherRequestTrigger",
+    automation.Trigger.template(cg.std_vector.template(cg.std_string)),
+)
+TuyaSendWeatherAction = tuya_ns.class_("TuyaSendWeatherAction", automation.Action)
+
+# Tuya weather keys and the type of their value on the wire (Tuya MCU SDK, Weather service, appendix 3).
+# w.windSpeed is a string with one decimal ("2.7"). Forecast entries carry the day after the name
+# (w.temp.1 or w.temp1) and take the base key's type.
+WEATHER_INT_KEYS = {
+    "w.temp",
+    "w.humidity",
+    "w.pressure",
+    "w.realFeel",
+    "w.uvi",
+    "w.windLevel",
+    "w.aqi",
+    "w.qualityLevel",
+    "w.pm10",
+    "w.pm25",
+    "w.o3",
+    "w.no2",
+    "w.co",
+    "w.so2",
+    "w.thigh",
+    "w.tlow",
+}
+WEATHER_STRING_KEYS = {
+    "w.conditionNum",
+    "w.windSpeed",
+    "w.windDir",
+    "w.sunrise",
+    "w.sunset",
+    "w.currdate",
+    "w.rank",
+    "w.quality",
+    "c.area",
+    "c.city",
+    "c.province",
+}
+WEATHER_KEYS = WEATHER_INT_KEYS | WEATHER_STRING_KEYS
+# Forecast values go on the wire as w.<key>.<day>, day 0 = today .. 6 (Tuya MCU SDK weather_data_raw_handle)
+WEATHER_FORECAST_RE = re.compile(r"^(w\.[A-Za-z]+)\.([0-6])$")
+
+
+def weather_base_key(key):
+    """The Tuya key without a forecast day suffix, or None for an unknown key."""
+    if key in WEATHER_KEYS:
+        return key
+    m = WEATHER_FORECAST_RE.match(key)
+    if m and m.group(1) in WEATHER_KEYS:
+        return m.group(1)
+    return None
+
+
+def weather_key_is_string(key):
+    return weather_base_key(key) in WEATHER_STRING_KEYS
+
+
+def weather_key_takes_sensor(key):
+    base = weather_base_key(key)
+    return base == "w.windSpeed" or base in WEATHER_INT_KEYS
+
 
 DPTYPE_ANY = "any"
 DPTYPE_RAW = "raw"
@@ -101,6 +171,45 @@ DATAPOINT_TRIGGERS = {
 }
 
 
+def weather_key(value):
+    value = cv.string_strict(value)
+    if weather_base_key(value) is None:
+        raise cv.Invalid(
+            f"'{value}' is not a Tuya weather key; known keys: "
+            f"{', '.join(sorted(WEATHER_KEYS))}, with an optional forecast day 0-6 (w.temp.1 = tomorrow)"
+        )
+    return value
+
+
+def validate_weather_sources(config):
+    out = {}
+    sources = 0
+    for key, value in config.items():
+        if key in (CONF_UPDATE_INTERVAL, CONF_ON_WEATHER_REQUEST):
+            out[key] = value
+            continue
+        try:
+            weather_key(key)
+            if weather_key_takes_sensor(key):
+                out[key] = cv.use_id(Sensor)(value)
+            else:
+                out[key] = cv.use_id(TextSensor)(value)
+        except cv.Invalid as err:
+            err.prepend([key])
+            raise
+        sources += 1
+    if sources == 0 and CONF_ON_WEATHER_REQUEST not in config:
+        raise cv.Invalid(
+            "weather needs at least one Tuya key with an entity id, or on_weather_request"
+        )
+    interval = out[CONF_UPDATE_INTERVAL].total_milliseconds
+    if interval != cv.SCHEDULER_DONT_RUN and interval < 60000:
+        raise cv.Invalid(
+            "update_interval must be at least 1min, or never", [CONF_UPDATE_INTERVAL]
+        )
+    return out
+
+
 def assign_declare_id(value):
     value = value.copy()
     value[CONF_TRIGGER_ID] = cv.declare_id(
@@ -150,6 +259,31 @@ CONFIG_SCHEMA = (
                     }
                 ),
                 _validate_mcu_recovery,
+            ),
+            # Tuya weather service: the MCU enables it (0x20) and asks for data (0x34/0x03); the component
+            # answers with the states of the entities given per Tuya key (sensor ids for numeric keys and
+            # w.windSpeed, text_sensor ids for string keys), skipping keys without a value, and fires
+            # on_weather_request (x = requested keys) for custom answers. update_interval (default never)
+            # adds pushes on a timer while the service is enabled, as Tuya's module does every 30 min.
+            cv.Optional(CONF_WEATHER): cv.All(
+                cv.Schema(
+                    {
+                        cv.Optional(
+                            CONF_UPDATE_INTERVAL, default="never"
+                        ): cv.update_interval,
+                        cv.Optional(
+                            CONF_ON_WEATHER_REQUEST
+                        ): automation.validate_automation(
+                            {
+                                cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(
+                                    TuyaWeatherRequestTrigger
+                                ),
+                            }
+                        ),
+                        cv.string_strict: cv.string_strict,
+                    }
+                ),
+                validate_weather_sources,
             ),
             cv.Optional(CONF_ON_DATAPOINT_UPDATE): automation.validate_automation(
                 {
@@ -227,3 +361,73 @@ async def to_code(config):
         await automation.build_automation(
             trigger, [(DATAPOINT_TYPES[conf[CONF_DATAPOINT_TYPE]], "x")], conf
         )
+    if CONF_WEATHER in config:
+        weather = config[CONF_WEATHER]
+        interval = weather[CONF_UPDATE_INTERVAL].total_milliseconds
+        if interval == cv.SCHEDULER_DONT_RUN:
+            interval = 0
+        cg.add(var.set_weather_service(interval))
+        for key, value in weather.items():
+            if key in (CONF_UPDATE_INTERVAL, CONF_ON_WEATHER_REQUEST):
+                continue
+            source = await cg.get_variable(value)
+            if weather_key_takes_sensor(key):
+                cg.add(var.add_weather_sensor(key, source))
+            else:
+                cg.add(var.add_weather_text_sensor(key, source))
+        for conf in weather.get(CONF_ON_WEATHER_REQUEST, []):
+            trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+            await automation.build_automation(
+                trigger, [(cg.std_vector.template(cg.std_string), "x")], conf
+            )
+
+
+def validate_send_weather(config):
+    # the key decides the type: string keys take a string (or lambda), the others an int32 (or lambda)
+    out = {CONF_ID: config[CONF_ID]}
+    for key, value in config.items():
+        if key == CONF_ID:
+            continue
+        try:
+            weather_key(key)
+            if weather_key_is_string(key):
+                out[key] = cv.templatable(cv.string)(value)
+            else:
+                out[key] = cv.templatable(cv.int_range(min=-(2**31), max=2**31 - 1))(
+                    value
+                )
+        except cv.Invalid as err:
+            err.prepend([key])
+            raise
+    if len(out) == 1:
+        raise cv.Invalid("tuya.send_weather needs at least one Tuya key")
+    return out
+
+
+SEND_WEATHER_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.use_id(Tuya),
+            cv.string_strict: cv.valid,
+        }
+    ),
+    validate_send_weather,
+)
+
+
+@automation.register_action(
+    "tuya.send_weather", TuyaSendWeatherAction, SEND_WEATHER_SCHEMA, synchronous=True
+)
+async def tuya_send_weather_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    for key, value in config.items():
+        if key == CONF_ID:
+            continue
+        if weather_key_is_string(key):
+            template_ = await cg.templatable(value, args, cg.std_string)
+            cg.add(var.add_string(key, template_))
+        else:
+            template_ = await cg.templatable(value, args, cg.int32)
+            cg.add(var.add_int(key, template_))
+    return var
