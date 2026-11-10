@@ -115,6 +115,17 @@ class Tuya final : public Component, public uart::UARTDevice {
   template<typename F> void add_on_initialized_callback(F &&callback) {
     this->initialized_callback_.add(std::forward<F>(callback));
   }
+#ifdef USE_TUYA_MCU_RECOVERY
+  void set_mcu_recovery(uint8_t missed_heartbeats) { this->recovery_missed_heartbeats_ = missed_heartbeats; }
+#endif
+#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+  void set_mcu_recovery_break(InternalGPIOPin *tx_pin, uint32_t break_time) {
+    this->tx_pin_ = tx_pin;
+    this->recovery_break_time_ = break_time;
+  }
+  /// Number of TX breaks sent since boot.
+  uint32_t get_mcu_recoveries() const { return this->mcu_recoveries_; }
+#endif
 
  protected:
   void handle_char_(uint8_t c);
@@ -137,6 +148,22 @@ class Tuya final : public Component, public uart::UARTDevice {
   uint8_t get_wifi_status_code_();
   uint8_t get_wifi_rssi_();
 
+#ifdef USE_TUYA_MCU_RECOVERY
+  void note_missed_heartbeat_();
+  bool recovery_reboot_() const;
+  uint8_t recovery_missed_heartbeats_{0};
+  uint8_t heartbeat_misses_{0};
+#endif
+#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+  void start_tx_break_();
+  void end_tx_break_();
+  InternalGPIOPin *tx_pin_{nullptr};
+  uint32_t recovery_break_time_{500};
+  uint32_t tx_break_start_{0};
+  uint32_t mcu_recoveries_{0};
+  bool tx_break_active_{false};
+  bool tx_break_unconfirmed_{false};
+#endif
 #ifdef USE_TIME
   void send_local_time_();
   void send_gmt_time_();

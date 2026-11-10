@@ -1,4 +1,5 @@
 #include "tuya.h"
+#include "esphome/core/application.h"
 #include "esphome/core/gpio.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
@@ -16,6 +17,10 @@
 #include "esphome/components/captive_portal/captive_portal.h"
 #endif
 
+#if defined(USE_TUYA_MCU_RECOVERY_BREAK) && defined(USE_LIBRETINY)
+#include "esphome/components/uart/uart_component_libretiny.h"
+#endif
+
 namespace esphome::tuya {
 
 static const char *const TAG = "tuya";
@@ -24,6 +29,10 @@ static const int RECEIVE_TIMEOUT = 300;
 static const int MAX_RETRIES = 5;
 // Max bytes to log for datapoint values (larger values are truncated)
 static constexpr size_t MAX_DATAPOINT_LOG_BYTES = 16;
+#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+// Shortest time between two TX breaks
+static constexpr uint32_t RECOVERY_MIN_INTERVAL = 60000;
+#endif
 
 static bool network_is_connected() {
 #ifdef USE_NETWORK
@@ -41,6 +50,13 @@ void Tuya::setup() {
 }
 
 void Tuya::loop() {
+#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+  if (this->tx_break_active_) {
+    if (millis() - this->tx_break_start_ < this->recovery_break_time_)
+      return;
+    this->end_tx_break_();
+  }
+#endif
   // Read all available bytes in batches to reduce UART call overhead.
   size_t avail = this->available();
   uint8_t buf[64];
@@ -94,6 +110,20 @@ void Tuya::dump_config() {
                   this->reset_pin_reported_);
   }
   LOG_PIN("  Status Pin: ", this->status_pin_);
+#ifdef USE_TUYA_MCU_RECOVERY
+  if (this->recovery_missed_heartbeats_ != 0) {
+    ESP_LOGCONFIG(TAG, "  MCU Recovery: %s after %u unanswered heartbeats",
+                  this->recovery_reboot_() ? "reboot" : "TX break", this->recovery_missed_heartbeats_);
+  }
+#endif
+#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+  if (this->tx_pin_ != nullptr) {
+    ESP_LOGCONFIG(TAG,
+                  "  Break Time: %" PRIu32 " ms\n"
+                  "  MCU Recoveries: %" PRIu32,
+                  this->recovery_break_time_, this->mcu_recoveries_);
+  }
+#endif
   ESP_LOGCONFIG(TAG, "  Product: '%s'", this->product_.c_str());
 }
 
@@ -172,6 +202,17 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
     this->expected_response_.reset();
     this->command_queue_.erase(command_queue_.begin());
     this->init_retries_ = 0;
+#ifdef USE_TUYA_MCU_RECOVERY
+    if (command_type == TuyaCommandType::HEARTBEAT) {
+      this->heartbeat_misses_ = 0;
+#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+      if (this->tx_break_unconfirmed_) {
+        this->tx_break_unconfirmed_ = false;
+        ESP_LOGI(TAG, "MCU answers heartbeats again after the TX break");
+      }
+#endif
+    }
+#endif
   }
 
   switch (command_type) {
@@ -533,6 +574,9 @@ void Tuya::process_command_queue_() {
   }
 
   if (this->expected_response_.has_value() && delay > RECEIVE_TIMEOUT) {
+#ifdef USE_TUYA_MCU_RECOVERY
+    const bool heartbeat = this->expected_response_ == TuyaCommandType::HEARTBEAT;
+#endif
     this->expected_response_.reset();
     if (init_state_ != TuyaInitState::INIT_DONE) {
       if (++this->init_retries_ >= MAX_RETRIES) {
@@ -543,8 +587,17 @@ void Tuya::process_command_queue_() {
       }
     } else {
       this->command_queue_.erase(command_queue_.begin());
+#ifdef USE_TUYA_MCU_RECOVERY
+      if (heartbeat)
+        this->note_missed_heartbeat_();
+#endif
     }
   }
+
+#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+  if (this->tx_break_active_)
+    return;
+#endif
 
   // Left check of delay since last command in case there's ever a command sent by calling send_raw_command_ directly
   if (delay > COMMAND_DELAY && !this->command_queue_.empty() && this->rx_message_.empty() &&
@@ -554,6 +607,62 @@ void Tuya::process_command_queue_() {
       this->command_queue_.erase(command_queue_.begin());
   }
 }
+
+#ifdef USE_TUYA_MCU_RECOVERY
+bool Tuya::recovery_reboot_() const {
+#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+  return this->tx_pin_ == nullptr;
+#else
+  return true;
+#endif
+}
+
+void Tuya::note_missed_heartbeat_() {
+  if (this->recovery_missed_heartbeats_ == 0 || ++this->heartbeat_misses_ < this->recovery_missed_heartbeats_)
+    return;
+#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+  if (!this->recovery_reboot_()) {
+    if (this->mcu_recoveries_ != 0 && millis() - this->tx_break_start_ < RECOVERY_MIN_INTERVAL)
+      return;
+    ESP_LOGW(TAG, "MCU left %u heartbeats unanswered, holding TX low for %" PRIu32 " ms", this->heartbeat_misses_,
+             this->recovery_break_time_);
+    this->heartbeat_misses_ = 0;
+    this->start_tx_break_();
+    return;
+  }
+#endif
+  ESP_LOGE(TAG, "MCU left %u heartbeats unanswered, rebooting", this->heartbeat_misses_);
+  App.safe_reboot();
+}
+
+#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+void Tuya::start_tx_break_() {
+  this->flush();
+#ifdef USE_LIBRETINY
+  static_cast<uart::LibreTinyUARTComponent *>(this->parent_)->get_hw_serial()->end();
+#endif
+  this->tx_pin_->setup();
+  this->tx_pin_->digital_write(false);
+  this->tx_break_start_ = millis();
+  this->tx_break_active_ = true;
+  this->tx_break_unconfirmed_ = true;
+  this->mcu_recoveries_++;
+}
+
+void Tuya::end_tx_break_() {
+  this->tx_break_active_ = false;
+  this->tx_pin_->digital_write(true);
+#ifdef USE_LIBRETINY
+  auto *bus = static_cast<uart::LibreTinyUARTComponent *>(this->parent_);
+  bus->get_hw_serial()->begin(bus->get_baud_rate(), bus->get_config());
+#elif defined(USE_ESP8266) || defined(USE_ESP32)
+  this->parent_->load_settings(false);
+#endif
+  this->rx_message_.clear();
+  this->send_empty_command_(TuyaCommandType::DATAPOINT_QUERY);
+}
+#endif  // USE_TUYA_MCU_RECOVERY_BREAK
+#endif  // USE_TUYA_MCU_RECOVERY
 
 void Tuya::send_command_(const TuyaCommand &command) {
   command_queue_.push_back(command);
