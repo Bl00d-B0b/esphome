@@ -9,10 +9,10 @@ import esphome.config_validation as cv
 from esphome.const import (
     CONF_ACTION,
     CONF_ID,
+    CONF_INVERTED,
     CONF_NUMBER,
     CONF_SENSOR_DATAPOINT,
     CONF_TIME_ID,
-    CONF_TIMEOUT,
     CONF_TRIGGER_ID,
     CONF_TX_PIN,
     CONF_UART_ID,
@@ -35,11 +35,13 @@ CONF_DATAPOINT_TYPE = "datapoint_type"
 CONF_STATUS_PIN = "status_pin"
 CONF_MCU_WATCHDOG = "mcu_watchdog"
 CONF_RESET_TIME = "reset_time"
+CONF_MISSED_HEARTBEATS = "missed_heartbeats"
 CONF_WEATHER = "weather"
 CONF_ON_WEATHER_REQUEST = "on_weather_request"
 
 ACTION_REBOOT = "reboot"
 ACTION_RESET = "reset"
+ACTION_DISABLE = "disable"
 RESET_PLATFORMS = [
     PLATFORM_BK72XX,
     PLATFORM_LN882X,
@@ -226,6 +228,10 @@ def _validate_mcu_watchdog(config: ConfigType) -> ConfigType:
         raise cv.Invalid(
             f"{CONF_ACTION}: {ACTION_RESET} requires {CONF_TX_PIN}", path=[CONF_ACTION]
         )
+    if config[CONF_TX_PIN][CONF_INVERTED]:
+        raise cv.Invalid(
+            f"{CONF_TX_PIN} must not be inverted", path=[CONF_TX_PIN, CONF_INVERTED]
+        )
     return config
 
 
@@ -239,18 +245,14 @@ CONFIG_SCHEMA = (
                 cv.uint8_t
             ),
             cv.Optional(CONF_STATUS_PIN): pins.gpio_output_pin_schema,
-            cv.Optional(CONF_MCU_WATCHDOG): cv.All(
+            cv.Optional(CONF_MCU_WATCHDOG, default={}): cv.All(
                 cv.Schema(
                     {
                         cv.Optional(CONF_ACTION, default=ACTION_REBOOT): cv.one_of(
-                            ACTION_REBOOT, ACTION_RESET, lower=True
+                            ACTION_REBOOT, ACTION_RESET, ACTION_DISABLE, lower=True
                         ),
-                        cv.Optional(CONF_TIMEOUT, default="90s"): cv.All(
-                            cv.positive_time_period_milliseconds,
-                            cv.Range(
-                                min=cv.TimePeriod(seconds=30),
-                                max=cv.TimePeriod(minutes=10),
-                            ),
+                        cv.Optional(CONF_MISSED_HEARTBEATS, default=6): cv.int_range(
+                            min=1, max=20
                         ),
                         cv.Optional(CONF_TX_PIN): pins.internal_gpio_output_pin_schema,
                         cv.Optional(CONF_RESET_TIME, default="500ms"): cv.All(
@@ -309,8 +311,8 @@ CONFIG_SCHEMA = (
 
 
 def _final_validate(config: ConfigType) -> ConfigType:
-    watchdog = config.get(CONF_MCU_WATCHDOG)
-    if watchdog is None or watchdog[CONF_ACTION] != ACTION_RESET:
+    watchdog = config[CONF_MCU_WATCHDOG]
+    if watchdog[CONF_ACTION] != ACTION_RESET:
         return config
     path = [CONF_MCU_WATCHDOG, CONF_TX_PIN]
     fconf = fv.full_config.get()
@@ -344,9 +346,10 @@ async def to_code(config):
     if CONF_STATUS_PIN in config:
         status_pin_ = await cg.gpio_pin_expression(config[CONF_STATUS_PIN])
         cg.add(var.set_status_pin(status_pin_))
-    if (watchdog := config.get(CONF_MCU_WATCHDOG)) is not None:
+    watchdog = config[CONF_MCU_WATCHDOG]
+    if watchdog[CONF_ACTION] != ACTION_DISABLE:
         cg.add_define("USE_TUYA_MCU_WATCHDOG")
-        cg.add(var.set_mcu_watchdog(watchdog[CONF_TIMEOUT].total_milliseconds))
+        cg.add(var.set_mcu_watchdog(watchdog[CONF_MISSED_HEARTBEATS]))
         if watchdog[CONF_ACTION] == ACTION_RESET:
             cg.add_define("USE_TUYA_MCU_WATCHDOG_RESET")
             tx_pin = await cg.gpio_pin_expression(watchdog[CONF_TX_PIN])

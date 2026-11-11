@@ -133,7 +133,7 @@ class Tuya final : public Component, public uart::UARTDevice {
     this->initialized_callback_.add(std::forward<F>(callback));
   }
 #ifdef USE_TUYA_MCU_WATCHDOG
-  void set_mcu_watchdog(uint32_t timeout) { this->watchdog_timeout_ = timeout; }
+  void set_mcu_watchdog(uint8_t missed_heartbeats) { this->watchdog_missed_heartbeats_ = missed_heartbeats; }
 #endif
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
   void set_mcu_watchdog_reset(InternalGPIOPin *tx_pin, uint32_t reset_time) {
@@ -196,10 +196,10 @@ class Tuya final : public Component, public uart::UARTDevice {
   uint8_t get_wifi_rssi_();
 
 #ifdef USE_TUYA_MCU_WATCHDOG
-  void check_mcu_watchdog_();
+  void note_missed_heartbeat_();
   bool watchdog_reboot_() const;
-  uint32_t watchdog_timeout_{0};
-  uint32_t last_heartbeat_reply_{0};
+  uint8_t watchdog_missed_heartbeats_{0};
+  uint8_t heartbeat_misses_{0};
 #endif
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
   void start_tx_break_();
