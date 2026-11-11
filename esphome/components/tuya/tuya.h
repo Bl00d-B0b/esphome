@@ -154,7 +154,7 @@ class Tuya final : public Component, public uart::UARTDevice {
     this->weather_update_interval_ = interval_ms;
   }
 #ifdef USE_SENSOR
-  /// Numeric source for a key: int keys send lroundf(state), w.windSpeed sends "%.1f"; NaN = key not sent.
+  /// Numeric source for a key: int keys send the rounded state, w.windSpeed sends "%.1f"; NaN = key not sent.
   void add_weather_sensor(const std::string &key, sensor::Sensor *source) {
     this->weather_sensors_.emplace_back(key, source);
   }
@@ -251,7 +251,8 @@ class Tuya final : public Component, public uart::UARTDevice {
   std::vector<std::string> weather_keys_;
   uint8_t weather_forecast_days_ = 0;  // w.date.N in the enable list: values w.<key>.<day> for day < N
   std::vector<TuyaWeatherValue> pending_weather_;
-  uint32_t last_weather_request_ = 0;  // last time a request was answered (or attempted)
+  uint32_t last_weather_request_ = 0;  // last attempt to answer a request
+  uint32_t last_weather_sent_ = 0;     // last answer that sent a frame
   uint32_t last_weather_demand_ = 0;   // last 0x34/0x03 that counted against the 20 min limit
   CallbackManager<void(std::vector<std::string>)> weather_request_callback_{};
 #ifdef USE_SENSOR

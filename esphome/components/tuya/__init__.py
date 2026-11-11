@@ -82,10 +82,14 @@ WEATHER_INT_KEYS = {
 }
 WEATHER_STRING_KEYS = {
     "w.conditionNum",
+    "w.condition",
+    "w.tips",
     "w.windSpeed",
     "w.windDir",
     "w.sunrise",
     "w.sunset",
+    "w.sunRise",
+    "w.sunSet",
     "w.currdate",
     "w.rank",
     "w.quality",
@@ -95,7 +99,7 @@ WEATHER_STRING_KEYS = {
 }
 WEATHER_KEYS = WEATHER_INT_KEYS | WEATHER_STRING_KEYS
 # Forecast values go on the wire as w.<key>.<day>, day 0 = today .. 6 (Tuya MCU SDK weather_data_raw_handle)
-WEATHER_FORECAST_RE = re.compile(r"^(w\.[A-Za-z]+)\.([0-6])$")
+WEATHER_FORECAST_RE = re.compile(r"^(w\.[A-Za-z0-9]+)\.([0-6])$")
 
 
 def weather_base_key(key):

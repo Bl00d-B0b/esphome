@@ -265,6 +265,9 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
         this->weather_enabled_ = false;
         this->weather_keys_.clear();
         this->weather_forecast_days_ = 0;
+        this->last_weather_request_ = 0;
+        this->last_weather_sent_ = 0;
+        this->last_weather_demand_ = 0;
       }
       if (this->init_state_ == TuyaInitState::INIT_HEARTBEAT) {
         this->init_state_ = TuyaInitState::INIT_PRODUCT;
@@ -452,20 +455,22 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
               .payload =
                   std::vector<uint8_t>{static_cast<uint8_t>(TuyaExtendedServicesCommandType::REQUEST_WEATHER), 0x00}});
           uint32_t now = millis();
-          // a 0x20 a moment ago already answered this request (the MCU sends both back to back)
-          bool answered =
-              this->last_weather_request_ != 0 && now - this->last_weather_request_ < WEATHER_REQUEST_DEBOUNCE;
+          // a frame was sent within the last 5 s (the MCU sends 0x20 and 0x34/0x03 back to back)
+          bool answered = this->last_weather_sent_ != 0 && now - this->last_weather_sent_ < WEATHER_REQUEST_DEBOUNCE;
           if (!answered && this->last_weather_demand_ != 0 &&
               now - this->last_weather_demand_ < WEATHER_DEMAND_MIN_INTERVAL) {
             ESP_LOGD(TAG, "MCU asks for weather data, last request %" PRIu32 " s ago, not repeated",
                      (now - this->last_weather_demand_) / 1000);
             break;
           }
-          this->last_weather_demand_ = now;  // every honoured request counts against the 20 min limit
-          if (answered)
+          if (answered) {
+            this->last_weather_demand_ = now;
             break;
+          }
           this->weather_enabled_ = true;
-          this->request_weather_(now);
+          // only a request that got a frame counts against the 20 min limit
+          if (this->request_weather_(now))
+            this->last_weather_demand_ = now;
           break;
         }
         case TuyaExtendedServicesCommandType::RESET_NOTIFICATION: {
@@ -1084,13 +1089,13 @@ bool Tuya::request_weather_(uint32_t now) {
       ESP_LOGD(TAG, "Weather %s: '%s' has no value, not sent", src.first.c_str(), src.second->get_name().c_str());
       continue;
     }
-    if (src.first.rfind("w.windSpeed", 0) == 0) {  // also the forecast variants w.windSpeed1 / w.windSpeed.1
+    if (src.first.rfind("w.windSpeed", 0) == 0) {  // also the forecast keys w.windSpeed.<day>
       char buf[16];
       snprintf(buf, sizeof(buf), "%.1f", state);
       values.push_back(TuyaWeatherValue{src.first, true, 0, buf});
     } else {
       float rounded = roundf(state);
-      if (rounded > 2147483647.0f || rounded < -2147483648.0f) {
+      if (rounded >= 2147483648.0f || rounded < -2147483648.0f) {
         ESP_LOGW(TAG, "Weather %s: %.0f is out of the int32 range, not sent", src.first.c_str(), state);
         continue;
       }
@@ -1113,7 +1118,10 @@ bool Tuya::request_weather_(uint32_t now) {
     ESP_LOGD(TAG, "Weather data requested, nothing to send");
     return false;
   }
-  return this->send_weather_frame_(std::move(values));
+  if (!this->send_weather_frame_(std::move(values)))
+    return false;
+  this->last_weather_sent_ = now;
+  return true;
 }
 
 bool Tuya::send_weather(const std::vector<TuyaWeatherValue> &values) {
