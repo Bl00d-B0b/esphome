@@ -12,6 +12,7 @@ from esphome.const import (
     CONF_NUMBER,
     CONF_SENSOR_DATAPOINT,
     CONF_TIME_ID,
+    CONF_TIMEOUT,
     CONF_TRIGGER_ID,
     CONF_TX_PIN,
     CONF_UART_ID,
@@ -32,17 +33,14 @@ CONF_IGNORE_MCU_UPDATE_ON_DATAPOINTS = "ignore_mcu_update_on_datapoints"
 CONF_ON_DATAPOINT_UPDATE = "on_datapoint_update"
 CONF_DATAPOINT_TYPE = "datapoint_type"
 CONF_STATUS_PIN = "status_pin"
-CONF_HEARTBEAT_INTERVAL = "heartbeat_interval"
-CONF_INIT_HEARTBEAT_INTERVAL = "init_heartbeat_interval"
-CONF_MCU_RECOVERY = "mcu_recovery"
-CONF_MISSED_HEARTBEATS = "missed_heartbeats"
-CONF_BREAK_TIME = "break_time"
+CONF_MCU_WATCHDOG = "mcu_watchdog"
+CONF_RESET_TIME = "reset_time"
 CONF_WEATHER = "weather"
 CONF_ON_WEATHER_REQUEST = "on_weather_request"
 
 ACTION_REBOOT = "reboot"
-ACTION_BREAK = "break"
-BREAK_PLATFORMS = [
+ACTION_RESET = "reset"
+RESET_PLATFORMS = [
     PLATFORM_BK72XX,
     PLATFORM_LN882X,
     PLATFORM_RTL87XX,
@@ -220,13 +218,13 @@ def assign_declare_id(value):
     return value
 
 
-def _validate_mcu_recovery(config: ConfigType) -> ConfigType:
-    if config[CONF_ACTION] != ACTION_BREAK:
+def _validate_mcu_watchdog(config: ConfigType) -> ConfigType:
+    if config[CONF_ACTION] != ACTION_RESET:
         return config
-    cv.only_on(BREAK_PLATFORMS)(config)
+    cv.only_on(RESET_PLATFORMS)(config)
     if CONF_TX_PIN not in config:
         raise cv.Invalid(
-            f"{CONF_ACTION}: {ACTION_BREAK} requires {CONF_TX_PIN}", path=[CONF_ACTION]
+            f"{CONF_ACTION}: {ACTION_RESET} requires {CONF_TX_PIN}", path=[CONF_ACTION]
         )
     return config
 
@@ -241,25 +239,21 @@ CONFIG_SCHEMA = (
                 cv.uint8_t
             ),
             cv.Optional(CONF_STATUS_PIN): pins.gpio_output_pin_schema,
-            cv.Optional(CONF_HEARTBEAT_INTERVAL, default="15s"): cv.All(
-                cv.positive_time_period_milliseconds,
-                cv.Range(min=cv.TimePeriod(seconds=1), max=cv.TimePeriod(seconds=60)),
-            ),
-            cv.Optional(CONF_INIT_HEARTBEAT_INTERVAL, default="3s"): cv.All(
-                cv.positive_time_period_milliseconds,
-                cv.Range(min=cv.TimePeriod(seconds=1), max=cv.TimePeriod(seconds=60)),
-            ),
-            cv.Optional(CONF_MCU_RECOVERY): cv.All(
+            cv.Optional(CONF_MCU_WATCHDOG): cv.All(
                 cv.Schema(
                     {
                         cv.Optional(CONF_ACTION, default=ACTION_REBOOT): cv.one_of(
-                            ACTION_REBOOT, ACTION_BREAK, lower=True
+                            ACTION_REBOOT, ACTION_RESET, lower=True
                         ),
-                        cv.Optional(CONF_MISSED_HEARTBEATS, default=6): cv.int_range(
-                            min=1, max=20
+                        cv.Optional(CONF_TIMEOUT, default="90s"): cv.All(
+                            cv.positive_time_period_milliseconds,
+                            cv.Range(
+                                min=cv.TimePeriod(seconds=30),
+                                max=cv.TimePeriod(minutes=10),
+                            ),
                         ),
                         cv.Optional(CONF_TX_PIN): pins.internal_gpio_output_pin_schema,
-                        cv.Optional(CONF_BREAK_TIME, default="500ms"): cv.All(
+                        cv.Optional(CONF_RESET_TIME, default="500ms"): cv.All(
                             cv.positive_time_period_milliseconds,
                             cv.Range(
                                 min=cv.TimePeriod(milliseconds=50),
@@ -268,7 +262,7 @@ CONFIG_SCHEMA = (
                         ),
                     }
                 ),
-                _validate_mcu_recovery,
+                _validate_mcu_watchdog,
             ),
             # Tuya weather service: the MCU enables it (0x20) and asks for data (0x34/0x03); the component
             # answers with the states of the entities given per Tuya key (sensor ids for numeric keys and
@@ -315,20 +309,20 @@ CONFIG_SCHEMA = (
 
 
 def _final_validate(config: ConfigType) -> ConfigType:
-    recovery = config.get(CONF_MCU_RECOVERY)
-    if recovery is None or recovery[CONF_ACTION] != ACTION_BREAK:
+    watchdog = config.get(CONF_MCU_WATCHDOG)
+    if watchdog is None or watchdog[CONF_ACTION] != ACTION_RESET:
         return config
-    path = [CONF_MCU_RECOVERY, CONF_TX_PIN]
+    path = [CONF_MCU_WATCHDOG, CONF_TX_PIN]
     fconf = fv.full_config.get()
     bus = fconf.get_config_for_path(fconf.get_path_for_id(config[CONF_UART_ID])[:-1])
     if str(bus[CONF_ID].type) not in uart.NATIVE_UART_CLASSES:
         raise cv.Invalid(
-            f"{CONF_ACTION}: {ACTION_BREAK} requires a UART bus of the microcontroller itself",
-            path=[CONF_MCU_RECOVERY, CONF_ACTION],
+            f"{CONF_ACTION}: {ACTION_RESET} requires a UART bus of the microcontroller itself",
+            path=[CONF_MCU_WATCHDOG, CONF_ACTION],
         )
     if (
         CONF_TX_PIN not in bus
-        or bus[CONF_TX_PIN][CONF_NUMBER] != recovery[CONF_TX_PIN][CONF_NUMBER]
+        or bus[CONF_TX_PIN][CONF_NUMBER] != watchdog[CONF_TX_PIN][CONF_NUMBER]
     ):
         raise cv.Invalid(
             f"{CONF_TX_PIN} must be the {CONF_TX_PIN} of the UART bus used by tuya",
@@ -350,21 +344,15 @@ async def to_code(config):
     if CONF_STATUS_PIN in config:
         status_pin_ = await cg.gpio_pin_expression(config[CONF_STATUS_PIN])
         cg.add(var.set_status_pin(status_pin_))
-    cg.add(
-        var.set_heartbeat_interval(
-            config[CONF_HEARTBEAT_INTERVAL].total_milliseconds,
-            config[CONF_INIT_HEARTBEAT_INTERVAL].total_milliseconds,
-        )
-    )
-    if (recovery := config.get(CONF_MCU_RECOVERY)) is not None:
-        cg.add_define("USE_TUYA_MCU_RECOVERY")
-        cg.add(var.set_mcu_recovery(recovery[CONF_MISSED_HEARTBEATS]))
-        if recovery[CONF_ACTION] == ACTION_BREAK:
-            cg.add_define("USE_TUYA_MCU_RECOVERY_BREAK")
-            tx_pin = await cg.gpio_pin_expression(recovery[CONF_TX_PIN])
+    if (watchdog := config.get(CONF_MCU_WATCHDOG)) is not None:
+        cg.add_define("USE_TUYA_MCU_WATCHDOG")
+        cg.add(var.set_mcu_watchdog(watchdog[CONF_TIMEOUT].total_milliseconds))
+        if watchdog[CONF_ACTION] == ACTION_RESET:
+            cg.add_define("USE_TUYA_MCU_WATCHDOG_RESET")
+            tx_pin = await cg.gpio_pin_expression(watchdog[CONF_TX_PIN])
             cg.add(
-                var.set_mcu_recovery_break(
-                    tx_pin, recovery[CONF_BREAK_TIME].total_milliseconds
+                var.set_mcu_watchdog_reset(
+                    tx_pin, watchdog[CONF_RESET_TIME].total_milliseconds
                 )
             )
     if CONF_IGNORE_MCU_UPDATE_ON_DATAPOINTS in config:

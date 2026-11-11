@@ -132,20 +132,16 @@ class Tuya final : public Component, public uart::UARTDevice {
   template<typename F> void add_on_initialized_callback(F &&callback) {
     this->initialized_callback_.add(std::forward<F>(callback));
   }
-  void set_heartbeat_interval(uint32_t interval, uint32_t init_interval) {
-    this->heartbeat_interval_ = interval;
-    this->init_heartbeat_interval_ = init_interval;
-  }
-#ifdef USE_TUYA_MCU_RECOVERY
-  void set_mcu_recovery(uint8_t missed_heartbeats) { this->recovery_missed_heartbeats_ = missed_heartbeats; }
+#ifdef USE_TUYA_MCU_WATCHDOG
+  void set_mcu_watchdog(uint32_t timeout) { this->watchdog_timeout_ = timeout; }
 #endif
-#ifdef USE_TUYA_MCU_RECOVERY_BREAK
-  void set_mcu_recovery_break(InternalGPIOPin *tx_pin, uint32_t break_time) {
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+  void set_mcu_watchdog_reset(InternalGPIOPin *tx_pin, uint32_t reset_time) {
     this->tx_pin_ = tx_pin;
-    this->recovery_break_time_ = break_time;
+    this->watchdog_reset_time_ = reset_time;
   }
-  /// Number of TX breaks sent since boot.
-  uint32_t get_mcu_recoveries() const { return this->mcu_recoveries_; }
+  /// Number of MCU resets since boot.
+  uint32_t get_mcu_resets() const { return this->mcu_resets_; }
 #endif
 
   /// Weather service: the MCU enables it with 0x20 (list of keys) and asks for data with 0x34/0x03. The
@@ -199,19 +195,19 @@ class Tuya final : public Component, public uart::UARTDevice {
   uint8_t get_wifi_status_code_();
   uint8_t get_wifi_rssi_();
 
-#ifdef USE_TUYA_MCU_RECOVERY
-  void note_missed_heartbeat_();
-  bool recovery_reboot_() const;
-  uint8_t recovery_missed_heartbeats_{0};
-  uint8_t heartbeat_misses_{0};
+#ifdef USE_TUYA_MCU_WATCHDOG
+  void check_mcu_watchdog_();
+  bool watchdog_reboot_() const;
+  uint32_t watchdog_timeout_{0};
+  uint32_t last_heartbeat_reply_{0};
 #endif
-#ifdef USE_TUYA_MCU_RECOVERY_BREAK
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
   void start_tx_break_();
   void end_tx_break_();
   InternalGPIOPin *tx_pin_{nullptr};
-  uint32_t recovery_break_time_{500};
+  uint32_t watchdog_reset_time_{500};
   uint32_t tx_break_start_{0};
-  uint32_t mcu_recoveries_{0};
+  uint32_t mcu_resets_{0};
   bool tx_break_active_{false};
   bool tx_break_unconfirmed_{false};
 #endif
@@ -224,17 +220,14 @@ class Tuya final : public Component, public uart::UARTDevice {
 #endif
   TuyaInitState init_state_ = TuyaInitState::INIT_HEARTBEAT;
   bool init_failed_{false};
-  int init_retries_{0};
   uint8_t protocol_version_ = -1;
   InternalGPIOPin *status_pin_{nullptr};
   int status_pin_reported_ = -1;
   int reset_pin_reported_ = -1;
   uint32_t last_command_timestamp_ = 0;
   uint32_t last_rx_char_timestamp_ = 0;
-  uint32_t heartbeat_interval_{15000};
-  // used until the MCU answers the working mode query
-  uint32_t init_heartbeat_interval_{3000};
-  bool init_heartbeat_{true};
+  bool working_mode_received_{false};
+  bool resent_{false};
   std::string product_;
   std::vector<TuyaDatapointListener> listeners_;
   std::vector<TuyaDatapoint> datapoints_;
