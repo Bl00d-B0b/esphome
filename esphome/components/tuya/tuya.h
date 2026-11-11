@@ -177,7 +177,7 @@ class Tuya final : public Component, public uart::UARTDevice {
 
  protected:
   void handle_char_(uint8_t c);
-  void handle_datapoints_(const uint8_t *buffer, size_t len);
+  void handle_datapoints_(const uint8_t *buffer, size_t len, bool ack);
   optional<TuyaDatapoint> get_datapoint_(uint8_t datapoint_id);
   bool validate_message_();
 
@@ -224,6 +224,7 @@ class Tuya final : public Component, public uart::UARTDevice {
 #endif
   TuyaInitState init_state_ = TuyaInitState::INIT_HEARTBEAT;
   bool init_failed_{false};
+  bool init_failure_logged_{false};
   uint8_t protocol_version_ = -1;
   InternalGPIOPin *status_pin_{nullptr};
   int status_pin_reported_ = -1;
@@ -254,6 +255,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   uint32_t weather_update_interval_ = 0;  // 0 = only on the MCU's requests
   bool weather_enabled_ = false;          // MCU sent 0x20 (or 0x34/0x03)
   bool collecting_weather_ = false;       // inside request_weather_: send_weather() collects into pending_weather_
+  bool weather_incomplete_ = false;       // last answer left out a configured source without a value
   std::vector<std::string> weather_keys_;
   uint8_t weather_forecast_days_ = 0;  // w.date.N in the enable list: values w.<key>.<day> for day < N
   std::vector<TuyaWeatherValue> pending_weather_;

@@ -242,19 +242,21 @@ def _validate_mcu_watchdog(config: ConfigType) -> ConfigType:
 
 
 def _validate_heartbeat(config: ConfigType) -> ConfigType:
-    # the watchdog counts heartbeat replies; its default is dropped without a heartbeat
-    if not config[CONF_HEARTBEAT] and (
-        config[CONF_MCU_WATCHDOG][CONF_ACTION] == ACTION_RESET
-    ):
+    # runs before the defaults: only a watchdog set in the config is rejected
+    if cv.boolean(config.get(CONF_HEARTBEAT, True)):
+        return config
+    watchdog = config.get(CONF_MCU_WATCHDOG) or {}
+    if CONF_MCU_WATCHDOG in config and watchdog.get(CONF_ACTION) != ACTION_DISABLE:
         raise cv.Invalid(
             f"{CONF_MCU_WATCHDOG} requires {CONF_HEARTBEAT}",
-            path=[CONF_MCU_WATCHDOG, CONF_ACTION],
+            path=[CONF_MCU_WATCHDOG],
         )
     return config
 
 
 CONF_TUYA_ID = "tuya_id"
 CONFIG_SCHEMA = cv.All(
+    _validate_heartbeat,
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(Tuya),
@@ -295,7 +297,7 @@ CONFIG_SCHEMA = cv.All(
                 cv.Schema(
                     {
                         cv.Optional(
-                            CONF_UPDATE_INTERVAL, default="never"
+                            CONF_UPDATE_INTERVAL, default="30min"
                         ): cv.update_interval,
                         cv.Optional(
                             CONF_ON_WEATHER_REQUEST
@@ -327,7 +329,6 @@ CONFIG_SCHEMA = cv.All(
     )
     .extend(cv.COMPONENT_SCHEMA)
     .extend(uart.UART_DEVICE_SCHEMA),
-    _validate_heartbeat,
 )
 
 
@@ -350,6 +351,11 @@ def _final_validate(config: ConfigType) -> ConfigType:
         raise cv.Invalid(
             f"{CONF_TX_PIN} must be the {CONF_TX_PIN} of the UART bus used by tuya",
             path=path,
+        )
+    if bus[CONF_TX_PIN][CONF_INVERTED]:
+        raise cv.Invalid(
+            f"{CONF_ACTION}: {ACTION_RESET} requires a UART bus with a {CONF_TX_PIN} that is not inverted",
+            path=[CONF_MCU_WATCHDOG, CONF_ACTION],
         )
     return config
 

@@ -94,6 +94,9 @@ void Tuya::set_heartbeat_interval_(uint32_t interval) {
 }
 
 void Tuya::retry_init_() {
+  // a query of the current step may still wait for its reply
+  if (!this->command_queue_.empty())
+    return;
   switch (this->init_state_) {
     case TuyaInitState::INIT_PRODUCT:
       this->send_empty_command_(TuyaCommandType::PRODUCT_QUERY);
@@ -117,6 +120,7 @@ void Tuya::start_network_status_() {
     this->set_interval("wifi", 1000, [this] { this->set_status_pin_(); });
   } else {
     this->init_state_ = TuyaInitState::INIT_WIFI;
+    this->wifi_status_ = -1;
     this->set_interval("wifi", 1000, [this] { this->send_wifi_status_(); });
   }
 }
@@ -294,6 +298,7 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
       if (buffer[0] == 0) {
         ESP_LOGI(TAG, "MCU restarted");
         this->init_state_ = TuyaInitState::INIT_HEARTBEAT;
+        this->init_failure_logged_ = false;
         if (this->working_mode_received_) {
           this->working_mode_received_ = false;
           this->set_heartbeat_interval_(INIT_HEARTBEAT_INTERVAL);
@@ -365,6 +370,8 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
           }
         } else {
           this->init_state_ = TuyaInitState::INIT_WIFI;
+          // the status is sent again when the initialization starts over
+          this->wifi_status_ = -1;
           ESP_LOGV(TAG, "Configured WIFI_STATE periodic send");
           this->set_interval("wifi", 1000, [this] { this->send_wifi_status_(); });
         }
@@ -415,12 +422,15 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
       if (this->init_state_ == TuyaInitState::INIT_DATAPOINT) {
         this->init_state_ = TuyaInitState::INIT_DONE;
         this->init_failed_ = false;
+        this->init_failure_logged_ = false;
         if (!this->heartbeat_)
           this->cancel_interval("heartbeat");
         this->set_timeout("datapoint_dump", 1000, [this] { this->dump_config(); });
         this->initialized_callback_.call();
       }
-      this->handle_datapoints_(buffer, len);
+      // a sync report has its own answer below
+      this->handle_datapoints_(buffer, len,
+                               this->datapoint_ack_ && command_type == TuyaCommandType::DATAPOINT_REPORT_ASYNC);
 
       if (command_type == TuyaCommandType::DATAPOINT_REPORT_SYNC) {
         this->send_command_(
@@ -499,15 +509,17 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
             ESP_LOGD(TAG, "MCU asks for weather data, weather service not configured");
             break;
           }
-          this->send_command_(TuyaCommand{
-              .cmd = TuyaCommandType::EXTENDED_SERVICES,
-              .payload =
-                  std::vector<uint8_t>{static_cast<uint8_t>(TuyaExtendedServicesCommandType::REQUEST_WEATHER), 0x00}});
           uint32_t now = millis();
           // a frame was sent within the last 5 s (the MCU sends 0x20 and 0x34/0x03 back to back)
           bool answered = this->last_weather_sent_ != 0 && now - this->last_weather_sent_ < WEATHER_REQUEST_DEBOUNCE;
-          if (!answered && this->last_weather_demand_ != 0 &&
-              now - this->last_weather_demand_ < WEATHER_DEMAND_MIN_INTERVAL) {
+          bool refused = !answered && this->last_weather_demand_ != 0 &&
+                         now - this->last_weather_demand_ < WEATHER_DEMAND_MIN_INTERVAL;
+          // result byte: 0x00 success, 0x01 failure
+          this->send_command_(
+              TuyaCommand{.cmd = TuyaCommandType::EXTENDED_SERVICES,
+                          .payload = std::vector<uint8_t>{
+                              static_cast<uint8_t>(TuyaExtendedServicesCommandType::REQUEST_WEATHER), refused}});
+          if (refused) {
             ESP_LOGD(TAG, "MCU asks for weather data, last request %" PRIu32 " s ago, not repeated",
                      (now - this->last_weather_demand_) / 1000);
             break;
@@ -517,8 +529,8 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
             break;
           }
           this->weather_enabled_ = true;
-          // only a request that got a frame counts against the 20 min limit
-          if (this->request_weather_(now))
+          // only a complete answer counts against the 20 min limit
+          if (this->request_weather_(now) && !this->weather_incomplete_)
             this->last_weather_demand_ = now;
           break;
         }
@@ -548,7 +560,7 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
   }
 }
 
-void Tuya::handle_datapoints_(const uint8_t *buffer, size_t len) {
+void Tuya::handle_datapoints_(const uint8_t *buffer, size_t len, bool ack) {
   while (len >= 4) {
     TuyaDatapoint datapoint{};
     datapoint.id = buffer[0];
@@ -627,7 +639,7 @@ void Tuya::handle_datapoints_(const uint8_t *buffer, size_t len) {
     len -= data_size + 4;
     buffer = data + data_size;
 
-    if (this->datapoint_ack_) {
+    if (ack) {
       this->send_command_(TuyaCommand{.cmd = TuyaCommandType::DATAPOINT_REPORT_ASYNC,
                                       .payload = std::vector<uint8_t>{datapoint.id, 0x00}});
     }
@@ -727,9 +739,13 @@ void Tuya::process_command_queue_() {
       const bool heartbeat = this->command_queue_.front().cmd == TuyaCommandType::HEARTBEAT;
 #endif
       this->command_queue_.erase(command_queue_.begin());
-      if (this->init_state_ != TuyaInitState::INIT_DONE && !this->init_failed_) {
-        this->init_failed_ = true;
-        ESP_LOGE(TAG, "Initialization failed at init_state %u", static_cast<uint8_t>(this->init_state_));
+      if (this->init_state_ != TuyaInitState::INIT_DONE) {
+        // without a heartbeat the step is tried again by retry_init_
+        this->init_failed_ = this->heartbeat_;
+        if (!this->init_failure_logged_) {
+          this->init_failure_logged_ = true;
+          ESP_LOGE(TAG, "Initialization failed at init_state %u", static_cast<uint8_t>(this->init_state_));
+        }
       }
 #ifdef USE_TUYA_MCU_WATCHDOG
       if (heartbeat)
@@ -1049,7 +1065,15 @@ void Tuya::send_datapoint_command_(uint8_t datapoint_id, TuyaDatapointType datap
 // (length, key); the module answers 0x20 [01 00] and then sends 0x21 [01, (len key type len value)...] at enable
 // and every 30 min, the MCU acks with an empty 0x21. 0x34/0x03 asks for data now, answered with 0x34 [03 00].
 // An empty key list is taken as "everything configured". Without a weather: block the requests are only logged.
-static const size_t WEATHER_MAX_PAYLOAD = 255;
+static constexpr size_t WEATHER_MAX_PAYLOAD = 1024;
+// Tuya's MCU SDK copies a string value into a 100 byte buffer
+static constexpr size_t WEATHER_MAX_STRING = 99;
+
+// w.<key>.<day>, day 0 = today
+static bool weather_key_has_day(const std::string &key) {
+  size_t n = key.size();
+  return n >= 3 && key[n - 2] == '.' && key[n - 1] >= '0' && key[n - 1] <= '6';
+}
 
 static bool weather_has_key(const std::vector<TuyaWeatherValue> &values, const std::string &key) {
   for (const auto &v : values) {
@@ -1106,7 +1130,7 @@ bool Tuya::weather_key_requested_(const std::string &key) const {
   if (std::find(this->weather_keys_.begin(), this->weather_keys_.end(), key) != this->weather_keys_.end())
     return true;
   size_t n = key.size();
-  if (n < 3 || key[n - 2] != '.' || key[n - 1] < '0' || key[n - 1] > '6')
+  if (!weather_key_has_day(key))
     return false;
   if (key[n - 1] - '0' >= this->weather_forecast_days_)
     return false;
@@ -1128,6 +1152,7 @@ bool Tuya::request_weather_(uint32_t now) {
   ESP_LOGD(TAG, "Weather data requested: %s", list.c_str());
 #endif
   this->pending_weather_.clear();
+  this->weather_incomplete_ = false;
   this->collecting_weather_ = true;
   this->weather_request_callback_.call(this->weather_keys_);
   this->collecting_weather_ = false;
@@ -1141,6 +1166,7 @@ bool Tuya::request_weather_(uint32_t now) {
     float state = src.second->state;
     if (!std::isfinite(state)) {
       ESP_LOGD(TAG, "Weather %s: '%s' has no value, not sent", src.first.c_str(), src.second->get_name().c_str());
+      this->weather_incomplete_ = true;
       continue;
     }
     if (src.first.rfind("w.windSpeed", 0) == 0) {  // also the forecast keys w.windSpeed.<day>
@@ -1163,6 +1189,7 @@ bool Tuya::request_weather_(uint32_t now) {
       continue;
     if (!src.second->has_state() || src.second->state.empty()) {
       ESP_LOGD(TAG, "Weather %s: '%s' has no value, not sent", src.first.c_str(), src.second->get_name().c_str());
+      this->weather_incomplete_ = true;
       continue;
     }
     values.push_back(TuyaWeatherValue{src.first, true, 0, src.second->state});
@@ -1205,9 +1232,18 @@ bool Tuya::send_weather_frame_(std::vector<TuyaWeatherValue> values) {
       ESP_LOGV(TAG, "Weather key %s not requested by the MCU, skipped", v.key.c_str());
       continue;
     }
-    size_t entry = 1 + v.key.size() + 2 + (v.is_string ? v.value_string.size() : 4);
-    if (v.key.size() > 255 || v.value_string.size() > 255 || payload.size() + entry > WEATHER_MAX_PAYLOAD) {
-      ESP_LOGW(TAG, "Weather %s: entry too long or frame full, not sent", v.key.c_str());
+    // an MCU that asked for a forecast (w.date.N) reads every key as w.<key>.<day>, today is day 0
+    bool today = this->weather_forecast_days_ != 0 && !weather_key_has_day(v.key);
+    if (today && weather_has_key(values, v.key + ".0"))
+      continue;
+    size_t key_size = v.key.size() + (today ? 2 : 0);
+    if (key_size > 255 || v.value_string.size() > WEATHER_MAX_STRING) {
+      ESP_LOGW(TAG, "Weather %s: key or value too long, not sent", v.key.c_str());
+      continue;
+    }
+    size_t entry = 1 + key_size + 2 + (v.is_string ? v.value_string.size() : 4);
+    if (payload.size() + entry > WEATHER_MAX_PAYLOAD) {
+      ESP_LOGW(TAG, "Weather %s: frame full, not sent", v.key.c_str());
       continue;
     }
     if (v.is_string) {
@@ -1215,8 +1251,12 @@ bool Tuya::send_weather_frame_(std::vector<TuyaWeatherValue> values) {
     } else {
       ESP_LOGD(TAG, "Weather %s: %" PRId32, v.key.c_str(), v.value_int);
     }
-    payload.push_back(static_cast<uint8_t>(v.key.size()));
+    payload.push_back(static_cast<uint8_t>(key_size));
     payload.insert(payload.end(), v.key.begin(), v.key.end());
+    if (today) {
+      payload.push_back('.');
+      payload.push_back('0');
+    }
     if (v.is_string) {
       payload.push_back(0x01);
       payload.push_back(static_cast<uint8_t>(v.value_string.size()));
