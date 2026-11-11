@@ -113,6 +113,8 @@ class Tuya final : public Component, public uart::UARTDevice {
   void set_boolean_datapoint_value(uint8_t datapoint_id, bool value);
   void set_integer_datapoint_value(uint8_t datapoint_id, uint32_t value);
   void set_status_pin(InternalGPIOPin *status_pin) { this->status_pin_ = status_pin; }
+  void set_heartbeat(bool heartbeat) { this->heartbeat_ = heartbeat; }
+  void set_datapoint_ack(bool datapoint_ack) { this->datapoint_ack_ = datapoint_ack; }
   void set_string_datapoint_value(uint8_t datapoint_id, const std::string &value);
   void set_enum_datapoint_value(uint8_t datapoint_id, uint8_t value);
   void set_bitmask_datapoint_value(uint8_t datapoint_id, uint32_t value, uint8_t length);
@@ -191,6 +193,8 @@ class Tuya final : public Component, public uart::UARTDevice {
   void send_datapoint_command_(uint8_t datapoint_id, TuyaDatapointType datapoint_type, std::vector<uint8_t> data);
   void set_status_pin_();
   void set_heartbeat_interval_(uint32_t interval);
+  void retry_init_();
+  void start_network_status_();
   void send_wifi_status_();
   uint8_t get_wifi_status_code_();
   uint8_t get_wifi_rssi_();
@@ -236,6 +240,8 @@ class Tuya final : public Component, public uart::UARTDevice {
   std::vector<TuyaCommand> command_queue_;
   optional<TuyaCommandType> expected_response_{};
   uint8_t wifi_status_ = -1;
+  bool heartbeat_{true};
+  bool datapoint_ack_{false};
   CallbackManager<void()> initialized_callback_{};
 
   // Weather service

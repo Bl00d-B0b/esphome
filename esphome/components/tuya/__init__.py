@@ -8,6 +8,7 @@ from esphome.components.text_sensor import TextSensor
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ACTION,
+    CONF_HEARTBEAT,
     CONF_ID,
     CONF_INVERTED,
     CONF_NUMBER,
@@ -38,6 +39,7 @@ CONF_RESET_TIME = "reset_time"
 CONF_MISSED_HEARTBEATS = "missed_heartbeats"
 CONF_WEATHER = "weather"
 CONF_ON_WEATHER_REQUEST = "on_weather_request"
+CONF_DATAPOINT_ACK = "datapoint_ack"
 
 ACTION_REBOOT = "reboot"
 ACTION_RESET = "reset"
@@ -239,8 +241,20 @@ def _validate_mcu_watchdog(config: ConfigType) -> ConfigType:
     return config
 
 
+def _validate_heartbeat(config: ConfigType) -> ConfigType:
+    # the watchdog counts heartbeat replies; its default is dropped without a heartbeat
+    if not config[CONF_HEARTBEAT] and (
+        config[CONF_MCU_WATCHDOG][CONF_ACTION] == ACTION_RESET
+    ):
+        raise cv.Invalid(
+            f"{CONF_MCU_WATCHDOG} requires {CONF_HEARTBEAT}",
+            path=[CONF_MCU_WATCHDOG, CONF_ACTION],
+        )
+    return config
+
+
 CONF_TUYA_ID = "tuya_id"
-CONFIG_SCHEMA = (
+CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(Tuya),
@@ -249,6 +263,8 @@ CONFIG_SCHEMA = (
                 cv.uint8_t
             ),
             cv.Optional(CONF_STATUS_PIN): pins.gpio_output_pin_schema,
+            cv.Optional(CONF_HEARTBEAT, default=True): cv.boolean,
+            cv.Optional(CONF_DATAPOINT_ACK, default=False): cv.boolean,
             cv.Optional(CONF_MCU_WATCHDOG, default={}): cv.All(
                 cv.Schema(
                     {
@@ -310,7 +326,8 @@ CONFIG_SCHEMA = (
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
-    .extend(uart.UART_DEVICE_SCHEMA)
+    .extend(uart.UART_DEVICE_SCHEMA),
+    _validate_heartbeat,
 )
 
 
@@ -350,8 +367,12 @@ async def to_code(config):
     if CONF_STATUS_PIN in config:
         status_pin_ = await cg.gpio_pin_expression(config[CONF_STATUS_PIN])
         cg.add(var.set_status_pin(status_pin_))
+    if not config[CONF_HEARTBEAT]:
+        cg.add(var.set_heartbeat(False))
+    if config[CONF_DATAPOINT_ACK]:
+        cg.add(var.set_datapoint_ack(True))
     watchdog = config[CONF_MCU_WATCHDOG]
-    if watchdog[CONF_ACTION] != ACTION_DISABLE:
+    if config[CONF_HEARTBEAT] and watchdog[CONF_ACTION] != ACTION_DISABLE:
         cg.add_define("USE_TUYA_MCU_WATCHDOG")
         cg.add(var.set_mcu_watchdog(watchdog[CONF_MISSED_HEARTBEATS]))
         if watchdog[CONF_ACTION] == ACTION_RESET:

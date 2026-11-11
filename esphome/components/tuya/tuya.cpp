@@ -48,7 +48,13 @@ static bool network_is_connected() {
 }
 
 void Tuya::setup() {
-  this->set_heartbeat_interval_(INIT_HEARTBEAT_INTERVAL);
+  if (this->heartbeat_) {
+    this->set_heartbeat_interval_(INIT_HEARTBEAT_INTERVAL);
+  } else {
+    // without a heartbeat the initialization starts at the product query
+    this->init_state_ = TuyaInitState::INIT_PRODUCT;
+    this->set_interval("heartbeat", INIT_HEARTBEAT_INTERVAL, [this] { this->retry_init_(); });
+  }
   if (this->status_pin_ != nullptr) {
     this->status_pin_->digital_write(false);
   }
@@ -87,8 +93,39 @@ void Tuya::set_heartbeat_interval_(uint32_t interval) {
   this->set_interval("heartbeat", interval, [this] { this->send_empty_command_(TuyaCommandType::HEARTBEAT); });
 }
 
+void Tuya::retry_init_() {
+  switch (this->init_state_) {
+    case TuyaInitState::INIT_PRODUCT:
+      this->send_empty_command_(TuyaCommandType::PRODUCT_QUERY);
+      break;
+    case TuyaInitState::INIT_WIFI:
+      // sent again by the status interval
+      this->wifi_status_ = -1;
+      break;
+    case TuyaInitState::INIT_DATAPOINT:
+      this->send_empty_command_(TuyaCommandType::DATAPOINT_QUERY);
+      break;
+    default:
+      break;
+  }
+}
+
+void Tuya::start_network_status_() {
+  if (this->status_pin_ != nullptr) {
+    this->init_state_ = TuyaInitState::INIT_DATAPOINT;
+    this->send_empty_command_(TuyaCommandType::DATAPOINT_QUERY);
+    this->set_interval("wifi", 1000, [this] { this->set_status_pin_(); });
+  } else {
+    this->init_state_ = TuyaInitState::INIT_WIFI;
+    this->set_interval("wifi", 1000, [this] { this->send_wifi_status_(); });
+  }
+}
+
 void Tuya::dump_config() {
   ESP_LOGCONFIG(TAG, "Tuya:");
+  if (!this->heartbeat_ || this->datapoint_ack_) {
+    ESP_LOGCONFIG(TAG, "  Heartbeat: %s, Datapoint Ack: %s", YESNO(this->heartbeat_), YESNO(this->datapoint_ack_));
+  }
 #ifdef USE_TUYA_MCU_WATCHDOG
   if (this->watchdog_missed_heartbeats_ != 0) {
     ESP_LOGCONFIG(TAG, "  MCU Watchdog: %s after %u unanswered heartbeats",
@@ -289,8 +326,14 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
         this->product_ = R"({"p":"INVALID"})";
       }
       if (this->init_state_ == TuyaInitState::INIT_PRODUCT) {
-        this->init_state_ = TuyaInitState::INIT_CONF;
-        this->send_empty_command_(TuyaCommandType::CONF_QUERY);
+        if (this->heartbeat_) {
+          this->init_state_ = TuyaInitState::INIT_CONF;
+          this->send_empty_command_(TuyaCommandType::CONF_QUERY);
+        } else {
+          // no heartbeat reply to take the version from, and no working mode query
+          this->protocol_version_ = version;
+          this->start_network_status_();
+        }
       }
       break;
     }
@@ -372,6 +415,8 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
       if (this->init_state_ == TuyaInitState::INIT_DATAPOINT) {
         this->init_state_ = TuyaInitState::INIT_DONE;
         this->init_failed_ = false;
+        if (!this->heartbeat_)
+          this->cancel_interval("heartbeat");
         this->set_timeout("datapoint_dump", 1000, [this] { this->dump_config(); });
         this->initialized_callback_.call();
       }
@@ -443,6 +488,10 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
       ESP_LOGV(TAG, "Weather data acknowledged by the MCU");
       break;
     case TuyaCommandType::EXTENDED_SERVICES: {
+      if (len == 0) {
+        ESP_LOGD(TAG, "Extended services request without a subcommand is not handled");
+        break;
+      }
       uint8_t subcommand = buffer[0];
       switch ((TuyaExtendedServicesCommandType) subcommand) {
         case TuyaExtendedServicesCommandType::REQUEST_WEATHER: {
@@ -577,6 +626,11 @@ void Tuya::handle_datapoints_(const uint8_t *buffer, size_t len) {
 
     len -= data_size + 4;
     buffer = data + data_size;
+
+    if (this->datapoint_ack_) {
+      this->send_command_(TuyaCommand{.cmd = TuyaCommandType::DATAPOINT_REPORT_ASYNC,
+                                      .payload = std::vector<uint8_t>{datapoint.id, 0x00}});
+    }
 
     // drop update if datapoint is in ignore_mcu_datapoint_update list
     bool skip = false;
