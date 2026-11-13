@@ -204,6 +204,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   bool watchdog_reboot_() const;
   uint8_t watchdog_missed_heartbeats_{0};
   uint8_t heartbeat_misses_{0};
+  uint8_t heartbeat_answers_{0};
 #endif
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
   void start_tx_break_();

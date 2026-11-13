@@ -274,7 +274,9 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
     this->command_queue_.erase(command_queue_.begin());
     this->resent_ = false;
 #ifdef USE_TUYA_MCU_WATCHDOG
-    if (command_type == TuyaCommandType::HEARTBEAT)
+    // an MCU that answers only now and then stays counted
+    if (command_type == TuyaCommandType::HEARTBEAT && this->heartbeat_answers_ < this->watchdog_missed_heartbeats_ &&
+        ++this->heartbeat_answers_ == this->watchdog_missed_heartbeats_)
       this->heartbeat_misses_ = 0;
 #endif
   }
@@ -778,6 +780,7 @@ bool Tuya::watchdog_reboot_() const {
 }
 
 void Tuya::note_missed_heartbeat_() {
+  this->heartbeat_answers_ = 0;
   if (this->watchdog_missed_heartbeats_ == 0 || ++this->heartbeat_misses_ < this->watchdog_missed_heartbeats_)
     return;
   this->heartbeat_misses_ = 0;
