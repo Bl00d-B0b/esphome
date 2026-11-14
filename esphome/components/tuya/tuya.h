@@ -157,13 +157,11 @@ class Tuya final : public Component, public uart::UARTDevice {
   }
 #ifdef USE_SENSOR
   /// Numeric source for a key: int keys send the rounded state, w.windSpeed sends "%.1f"; NaN = key not sent.
-  void add_weather_sensor(const std::string &key, sensor::Sensor *source) {
-    this->weather_sensors_.emplace_back(key, source);
-  }
+  void add_weather_sensor(const char *key, sensor::Sensor *source) { this->weather_sensors_.emplace_back(key, source); }
 #endif
 #ifdef USE_TEXT_SENSOR
   /// String source for a key (w.conditionNum, w.windDir, ...); no state = key not sent.
-  void add_weather_text_sensor(const std::string &key, text_sensor::TextSensor *source) {
+  void add_weather_text_sensor(const char *key, text_sensor::TextSensor *source) {
     this->weather_text_sensors_.emplace_back(key, source);
   }
 #endif
@@ -226,6 +224,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   TuyaInitState init_state_ = TuyaInitState::INIT_HEARTBEAT;
   bool init_failed_{false};
   bool init_failure_logged_{false};
+  TuyaInitState init_failure_state_{TuyaInitState::INIT_HEARTBEAT};  // step of the last logged failure
   uint8_t protocol_version_ = -1;
   InternalGPIOPin *status_pin_{nullptr};
   int status_pin_reported_ = -1;
@@ -248,6 +247,7 @@ class Tuya final : public Component, public uart::UARTDevice {
 
   // Weather service
   void handle_weather_enable_(const uint8_t *buffer, size_t len);
+  void arm_weather_timeout_();
   bool request_weather_(uint32_t now);
   bool send_weather_frame_(std::vector<TuyaWeatherValue> values);
   bool weather_frame_queued_() const;
@@ -256,19 +256,19 @@ class Tuya final : public Component, public uart::UARTDevice {
   uint32_t weather_update_interval_ = 0;  // 0 = only on the MCU's requests
   bool weather_enabled_ = false;          // MCU sent 0x20 (or 0x34/0x03)
   bool collecting_weather_ = false;       // inside request_weather_: send_weather() collects into pending_weather_
-  bool weather_incomplete_ = false;       // last answer left out a configured source without a value
+  bool weather_incomplete_ = false;       // last answer left out a value (no state, out of range, too long)
   std::vector<std::string> weather_keys_;
   uint8_t weather_forecast_days_ = 0;  // w.date.N in the enable list: values w.<key>.<day> for day < N
   std::vector<TuyaWeatherValue> pending_weather_;
-  uint32_t last_weather_request_ = 0;  // last attempt to answer a request
-  uint32_t last_weather_sent_ = 0;     // last answer that sent a frame
-  uint32_t last_weather_demand_ = 0;   // last 0x34/0x03 that counted against the 20 min limit
+  uint32_t last_weather_sent_ = 0;    // last answer that sent a frame
+  uint32_t last_weather_demand_ = 0;  // last 0x34/0x03 that counted against the 20 min limit
   CallbackManager<void(std::vector<std::string>)> weather_request_callback_{};
 #ifdef USE_SENSOR
-  std::vector<std::pair<std::string, sensor::Sensor *>> weather_sensors_;
+  // keys are codegen literals
+  std::vector<std::pair<const char *, sensor::Sensor *>> weather_sensors_;
 #endif
 #ifdef USE_TEXT_SENSOR
-  std::vector<std::pair<std::string, text_sensor::TextSensor *>> weather_text_sensors_;
+  std::vector<std::pair<const char *, text_sensor::TextSensor *>> weather_text_sensors_;
 #endif
 };
 

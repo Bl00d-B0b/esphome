@@ -62,10 +62,10 @@ class TuyaWeatherRequestTrigger final : public Trigger<std::vector<std::string>>
 template<typename... Ts> class TuyaSendWeatherAction final : public Action<Ts...> {
  public:
   explicit TuyaSendWeatherAction(Tuya *parent) : parent_(parent) {}
-  void add_int(const std::string &key, TemplatableValue<int32_t, Ts...> value) {
+  void add_int(const char *key, TemplatableValue<int32_t, Ts...> value) {
     this->entries_.push_back(Entry{key, false, std::move(value), {}});
   }
-  void add_string(const std::string &key, TemplatableValue<std::string, Ts...> value) {
+  void add_string(const char *key, TemplatableValue<std::string, Ts...> value) {
     this->entries_.push_back(Entry{key, true, {}, std::move(value)});
   }
   void play(const Ts &...x) override {
@@ -83,7 +83,7 @@ template<typename... Ts> class TuyaSendWeatherAction final : public Action<Ts...
 
  protected:
   struct Entry {
-    std::string key;
+    const char *key;  // codegen literal
     bool is_string;
     TemplatableValue<int32_t, Ts...> int_value;
     TemplatableValue<std::string, Ts...> string_value;

@@ -1,6 +1,7 @@
 #include "tuya.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include "esphome/core/application.h"
 #include "esphome/core/gpio.h"
 #include "esphome/core/helpers.h"
@@ -23,6 +24,10 @@
 #include "esphome/components/uart/uart_component_libretiny.h"
 #endif
 
+#if defined(USE_TUYA_MCU_WATCHDOG_RESET) && defined(USE_ESP32)
+#include "esphome/components/uart/uart_component_esp_idf.h"
+#endif
+
 namespace esphome::tuya {
 
 static const char *const TAG = "tuya";
@@ -32,6 +37,7 @@ static constexpr uint32_t INIT_HEARTBEAT_INTERVAL = 3000;
 static constexpr uint32_t HEARTBEAT_INTERVAL = 15000;
 static constexpr uint32_t RESPONSE_TIMEOUT = 1000;
 static constexpr uint32_t RX_FRAME_TIMEOUT = 400;
+static const char *const WEATHER_TIMEOUT_ID = "weather";
 // Tuya: an on-demand weather request (0x34/0x03) is served at most once per 20 min.
 static const uint32_t WEATHER_DEMAND_MIN_INTERVAL = 20 * 60 * 1000;
 // The MCU sends 0x20 and 0x34/0x03 back to back; one request callback answers both.
@@ -54,6 +60,7 @@ void Tuya::setup() {
     // without a heartbeat the initialization starts at the product query
     this->init_state_ = TuyaInitState::INIT_PRODUCT;
     this->set_interval("heartbeat", INIT_HEARTBEAT_INTERVAL, [this] { this->retry_init_(); });
+    this->send_empty_command_(TuyaCommandType::PRODUCT_QUERY);
   }
   if (this->status_pin_ != nullptr) {
     this->status_pin_->digital_write(false);
@@ -63,15 +70,11 @@ void Tuya::setup() {
 void Tuya::loop() {
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
   if (this->tx_break_active_) {
-    if (millis() - this->tx_break_start_ < this->watchdog_reset_time_)
+    if (App.get_loop_component_start_time() - this->tx_break_start_ < this->watchdog_reset_time_)
       return;
     this->end_tx_break_();
   }
 #endif
-  if (this->weather_enabled_ && this->weather_update_interval_ != 0 &&
-      millis() - this->last_weather_request_ >= this->weather_update_interval_ && !this->weather_frame_queued_()) {
-    this->request_weather_(millis());
-  }
   // Read all available bytes in batches to reduce UART call overhead.
   size_t avail = this->available();
   uint8_t buf[64];
@@ -144,7 +147,8 @@ void Tuya::dump_config() {
   }
 #endif
   if (this->init_state_ != TuyaInitState::INIT_DONE) {
-    if (this->init_failed_) {
+    // init_failure_logged_: with heartbeat: false the failed step is retried and init_failed_ stays clear
+    if (this->init_failed_ || this->init_failure_logged_) {
       ESP_LOGCONFIG(TAG, "  Initialization failed. Current init_state: %u", static_cast<uint8_t>(this->init_state_));
     } else {
       ESP_LOGCONFIG(TAG, "  Configuration will be reported when setup is complete. Current init_state: %u",
@@ -189,11 +193,11 @@ void Tuya::dump_config() {
     }
 #ifdef USE_SENSOR
     for (auto &src : this->weather_sensors_)
-      ESP_LOGCONFIG(TAG, "    %s from sensor '%s'", src.first.c_str(), src.second->get_name().c_str());
+      ESP_LOGCONFIG(TAG, "    %s from sensor '%s'", src.first, src.second->get_name().c_str());
 #endif
 #ifdef USE_TEXT_SENSOR
     for (auto &src : this->weather_text_sensors_)
-      ESP_LOGCONFIG(TAG, "    %s from text sensor '%s'", src.first.c_str(), src.second->get_name().c_str());
+      ESP_LOGCONFIG(TAG, "    %s from text sensor '%s'", src.first, src.second->get_name().c_str());
 #endif
   }
 }
@@ -309,7 +313,7 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
         this->weather_enabled_ = false;
         this->weather_keys_.clear();
         this->weather_forecast_days_ = 0;
-        this->last_weather_request_ = 0;
+        this->cancel_timeout(WEATHER_TIMEOUT_ID);
         this->last_weather_sent_ = 0;
         this->last_weather_demand_ = 0;
       }
@@ -429,6 +433,9 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
           this->cancel_interval("heartbeat");
         this->set_timeout("datapoint_dump", 1000, [this] { this->dump_config(); });
         this->initialized_callback_.call();
+        // a request the MCU made during the initialization got no frame
+        if (this->weather_enabled_ && !this->weather_frame_queued_())
+          this->request_weather_(millis());
       }
       // a sync report has its own answer below
       this->handle_datapoints_(buffer, len,
@@ -527,13 +534,18 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
             break;
           }
           if (answered) {
-            this->last_weather_demand_ = now;
+            // only a complete answer counts against the 20 min limit
+            if (!this->weather_incomplete_)
+              this->last_weather_demand_ = now;
             break;
           }
           this->weather_enabled_ = true;
-          // only a complete answer counts against the 20 min limit
-          if (this->request_weather_(now) && !this->weather_incomplete_)
+          if (!this->request_weather_(now)) {
+            ESP_LOGW(TAG, "MCU asked for weather data, nothing was sent");
+          } else if (!this->weather_incomplete_) {
+            // only a complete answer counts against the 20 min limit
             this->last_weather_demand_ = now;
+          }
           break;
         }
         case TuyaExtendedServicesCommandType::RESET_NOTIFICATION: {
@@ -744,8 +756,9 @@ void Tuya::process_command_queue_() {
       if (this->init_state_ != TuyaInitState::INIT_DONE) {
         // without a heartbeat the step is tried again by retry_init_
         this->init_failed_ = this->heartbeat_;
-        if (!this->init_failure_logged_) {
+        if (!this->init_failure_logged_ || this->init_failure_state_ != this->init_state_) {
           this->init_failure_logged_ = true;
+          this->init_failure_state_ = this->init_state_;
           ESP_LOGE(TAG, "Initialization failed at init_state %u", static_cast<uint8_t>(this->init_state_));
         }
       }
@@ -818,7 +831,16 @@ void Tuya::end_tx_break_() {
 #ifdef USE_LIBRETINY
   auto *bus = static_cast<uart::LibreTinyUARTComponent *>(this->parent_);
   bus->get_hw_serial()->begin(bus->get_baud_rate(), bus->get_config());
-#elif defined(USE_ESP8266) || defined(USE_ESP32)
+#elif defined(USE_ESP32)
+  auto *bus = static_cast<uart::IDFUARTComponent *>(this->parent_);
+  bus->load_settings(false);
+  if (bus->is_failed()) {
+    // another break cannot bring the driver back
+    ESP_LOGE(TAG, "UART failed to start after the MCU reset, rebooting");
+    App.safe_reboot();
+    return;
+  }
+#elif defined(USE_ESP8266)
   this->parent_->load_settings(false);
 #endif
   this->rx_message_.clear();
@@ -1078,7 +1100,7 @@ static bool weather_key_has_day(const std::string &key) {
   return n >= 3 && key[n - 2] == '.' && key[n - 1] >= '0' && key[n - 1] <= '6';
 }
 
-static bool weather_has_key(const std::vector<TuyaWeatherValue> &values, const std::string &key) {
+static bool weather_has_key(const std::vector<TuyaWeatherValue> &values, const char *key) {
   for (const auto &v : values) {
     if (v.key == key)
       return true;
@@ -1117,6 +1139,17 @@ void Tuya::handle_weather_enable_(const uint8_t *buffer, size_t len) {
   this->request_weather_(millis());
 }
 
+// The next unrequested frame is due one update interval after the last request.
+void Tuya::arm_weather_timeout_() {
+  if (this->weather_update_interval_ == 0)
+    return;
+  this->set_timeout(WEATHER_TIMEOUT_ID, this->weather_update_interval_, [this] {
+    this->arm_weather_timeout_();
+    if (this->weather_enabled_ && !this->weather_frame_queued_())
+      this->request_weather_(millis());
+  });
+}
+
 bool Tuya::weather_frame_queued_() const {
   for (const auto &cmd : this->command_queue_) {
     if (cmd.cmd == TuyaCommandType::WEATHER_DATA)
@@ -1144,7 +1177,7 @@ bool Tuya::weather_key_requested_(const std::string &key) const {
 // Answer a request: automations first (their send_weather() calls are collected), then the configured sources
 // for the keys they left out, one 0x21 frame in all.
 bool Tuya::request_weather_(uint32_t now) {
-  this->last_weather_request_ = now;
+  this->arm_weather_timeout_();
 #if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG
   std::string list;
   for (const auto &key : this->weather_keys_) {
@@ -1168,18 +1201,19 @@ bool Tuya::request_weather_(uint32_t now) {
       continue;  // answered by an automation
     float state = src.second->state;
     if (!std::isfinite(state)) {
-      ESP_LOGD(TAG, "Weather %s: '%s' has no value, not sent", src.first.c_str(), src.second->get_name().c_str());
+      ESP_LOGD(TAG, "Weather %s: '%s' has no value, not sent", src.first, src.second->get_name().c_str());
       this->weather_incomplete_ = true;
       continue;
     }
-    if (src.first.rfind("w.windSpeed", 0) == 0) {  // also the forecast keys w.windSpeed.<day>
+    if (strncmp(src.first, "w.windSpeed", 11) == 0) {  // also the forecast keys w.windSpeed.<day>
       char buf[16];
       snprintf(buf, sizeof(buf), "%.1f", state);
       values.push_back(TuyaWeatherValue{src.first, true, 0, buf});
     } else {
       float rounded = roundf(state);
       if (rounded >= 2147483648.0f || rounded < -2147483648.0f) {
-        ESP_LOGW(TAG, "Weather %s: %.0f is out of the int32 range, not sent", src.first.c_str(), state);
+        ESP_LOGW(TAG, "Weather %s: %.0f is out of the int32 range, not sent", src.first, state);
+        this->weather_incomplete_ = true;
         continue;
       }
       values.push_back(TuyaWeatherValue{src.first, false, static_cast<int32_t>(rounded), {}});
@@ -1191,7 +1225,7 @@ bool Tuya::request_weather_(uint32_t now) {
     if (weather_has_key(values, src.first))
       continue;
     if (!src.second->has_state() || src.second->state.empty()) {
-      ESP_LOGD(TAG, "Weather %s: '%s' has no value, not sent", src.first.c_str(), src.second->get_name().c_str());
+      ESP_LOGD(TAG, "Weather %s: '%s' has no value, not sent", src.first, src.second->get_name().c_str());
       this->weather_incomplete_ = true;
       continue;
     }
@@ -1211,12 +1245,16 @@ bool Tuya::request_weather_(uint32_t now) {
 bool Tuya::send_weather(const std::vector<TuyaWeatherValue> &values) {
   if (this->collecting_weather_) {
     for (const auto &v : values) {
-      if (!weather_has_key(this->pending_weather_, v.key))
+      if (!weather_has_key(this->pending_weather_, v.key.c_str()))
         this->pending_weather_.push_back(v);
     }
     return true;
   }
-  return this->send_weather_frame_(values);
+  if (!this->send_weather_frame_(values)) {
+    ESP_LOGW(TAG, "send_weather outside a request of the MCU: nothing was sent");
+    return false;
+  }
+  return true;
 }
 
 bool Tuya::send_weather_frame_(std::vector<TuyaWeatherValue> values) {
@@ -1237,16 +1275,18 @@ bool Tuya::send_weather_frame_(std::vector<TuyaWeatherValue> values) {
     }
     // an MCU that asked for a forecast (w.date.N) reads every key as w.<key>.<day>, today is day 0
     bool today = this->weather_forecast_days_ != 0 && !weather_key_has_day(v.key);
-    if (today && weather_has_key(values, v.key + ".0"))
+    if (today && weather_has_key(values, (v.key + ".0").c_str()))
       continue;
     size_t key_size = v.key.size() + (today ? 2 : 0);
     if (key_size > 255 || v.value_string.size() > WEATHER_MAX_STRING) {
       ESP_LOGW(TAG, "Weather %s: key or value too long, not sent", v.key.c_str());
+      this->weather_incomplete_ = true;
       continue;
     }
     size_t entry = 1 + key_size + 2 + (v.is_string ? v.value_string.size() : 4);
     if (payload.size() + entry > WEATHER_MAX_PAYLOAD) {
       ESP_LOGW(TAG, "Weather %s: frame full, not sent", v.key.c_str());
+      this->weather_incomplete_ = true;
       continue;
     }
     if (v.is_string) {

@@ -246,7 +246,10 @@ def _validate_heartbeat(config: ConfigType) -> ConfigType:
     if cv.boolean(config.get(CONF_HEARTBEAT, True)):
         return config
     watchdog = config.get(CONF_MCU_WATCHDOG) or {}
-    if CONF_MCU_WATCHDOG in config and watchdog.get(CONF_ACTION) != ACTION_DISABLE:
+    if not isinstance(watchdog, dict):
+        return config  # the schema reports the wrong type
+    action = str(watchdog.get(CONF_ACTION, "")).lower()
+    if CONF_MCU_WATCHDOG in config and action != ACTION_DISABLE:
         raise cv.Invalid(
             f"{CONF_MCU_WATCHDOG} requires {CONF_HEARTBEAT}",
             path=[CONF_MCU_WATCHDOG],
