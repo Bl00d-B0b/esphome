@@ -286,6 +286,7 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
       if (this->tx_break_unconfirmed_) {
         this->tx_break_unconfirmed_ = false;
+        this->status_clear_warning();
         ESP_LOGI(TAG, "MCU answers heartbeats again after the reset");
       }
 #endif
@@ -545,6 +546,11 @@ void Tuya::handle_datapoints_(const uint8_t *buffer, size_t len, bool ack) {
     size_t data_size = (buffer[2] << 8) + buffer[3];
     const uint8_t *data = buffer + 4;
     size_t data_len = len - 4;
+    // before the checks below: a datapoint that cannot be parsed is acknowledged too
+    if (ack) {
+      this->send_command_(TuyaCommand{.cmd = TuyaCommandType::DATAPOINT_REPORT_ASYNC,
+                                      .payload = std::vector<uint8_t>{datapoint.id, 0x00}});
+    }
     if (data_size > data_len) {
       ESP_LOGW(TAG, "Datapoint %u is truncated and cannot be parsed (%zu > %zu)", datapoint.id, data_size, data_len);
       return;
@@ -613,11 +619,6 @@ void Tuya::handle_datapoints_(const uint8_t *buffer, size_t len, bool ack) {
 
     len -= data_size + 4;
     buffer = data + data_size;
-
-    if (ack) {
-      this->send_command_(TuyaCommand{.cmd = TuyaCommandType::DATAPOINT_REPORT_ASYNC,
-                                      .payload = std::vector<uint8_t>{datapoint.id, 0x00}});
-    }
 
     // drop update if datapoint is in ignore_mcu_datapoint_update list
     bool skip = false;
@@ -728,6 +729,10 @@ void Tuya::process_command_queue_() {
           ESP_LOGD(TAG, "Command 0x%02X got no reply at init_state %u", static_cast<uint8_t>(dropped),
                    static_cast<uint8_t>(this->init_state_));
         }
+      } else if (dropped == TuyaCommandType::DATAPOINT_DELIVER) {
+        ESP_LOGW(TAG, "Datapoint command got no report from the MCU, dropped");
+      } else if (dropped != TuyaCommandType::HEARTBEAT) {
+        ESP_LOGD(TAG, "Command 0x%02X got no reply, dropped", static_cast<uint8_t>(dropped));
       }
 #ifdef USE_TUYA_MCU_WATCHDOG
       if (dropped == TuyaCommandType::HEARTBEAT)
@@ -766,7 +771,12 @@ void Tuya::note_missed_heartbeat_() {
   this->heartbeat_misses_ = 0;
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
   if (!this->watchdog_reboot_()) {
-    ESP_LOGW(TAG, "MCU left %u heartbeats unanswered, holding TX low", this->watchdog_missed_heartbeats_);
+    if (this->tx_break_unconfirmed_) {
+      ESP_LOGE(TAG, "MCU left %u heartbeats unanswered after a reset, holding TX low again",
+               this->watchdog_missed_heartbeats_);
+    } else {
+      ESP_LOGW(TAG, "MCU left %u heartbeats unanswered, holding TX low", this->watchdog_missed_heartbeats_);
+    }
     this->start_tx_break_();
     return;
   }
@@ -792,6 +802,8 @@ void Tuya::start_tx_break_() {
   this->tx_break_start_ = millis();
   this->tx_break_active_ = true;
   this->tx_break_unconfirmed_ = true;
+  // until the MCU answers a heartbeat again
+  this->status_set_warning(LOG_STR("MCU does not answer heartbeats"));
   this->mcu_resets_++;
 }
 
