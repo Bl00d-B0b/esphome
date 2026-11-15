@@ -10,21 +10,11 @@ from esphome.const import (
     CONF_ACTION,
     CONF_HEARTBEAT,
     CONF_ID,
-    CONF_INVERTED,
     CONF_SENSOR_DATAPOINT,
     CONF_TIME_ID,
     CONF_TRIGGER_ID,
-    CONF_TX_PIN,
-    CONF_UART_ID,
     CONF_UPDATE_INTERVAL,
-    PLATFORM_BK72XX,
-    PLATFORM_ESP32,
-    PLATFORM_ESP8266,
-    PLATFORM_LN882X,
-    PLATFORM_RTL87XX,
 )
-from esphome.core import CORE, ID
-import esphome.final_validate as fv
 from esphome.types import ConfigType
 
 DEPENDENCIES = ["uart"]
@@ -35,22 +25,13 @@ CONF_ON_DATAPOINT_UPDATE = "on_datapoint_update"
 CONF_DATAPOINT_TYPE = "datapoint_type"
 CONF_STATUS_PIN = "status_pin"
 CONF_MCU_WATCHDOG = "mcu_watchdog"
-CONF_RESET_TIME = "reset_time"
 CONF_MISSED_HEARTBEATS = "missed_heartbeats"
 CONF_WEATHER = "weather"
 CONF_ON_WEATHER_REQUEST = "on_weather_request"
 CONF_DATAPOINT_ACK = "datapoint_ack"
 
 ACTION_REBOOT = "reboot"
-ACTION_RESET = "reset"
 ACTION_DISABLE = "disable"
-RESET_PLATFORMS = [
-    PLATFORM_BK72XX,
-    PLATFORM_LN882X,
-    PLATFORM_RTL87XX,
-    PLATFORM_ESP8266,
-    PLATFORM_ESP32,
-]
 
 tuya_ns = cg.esphome_ns.namespace("tuya")
 TuyaDatapointType = tuya_ns.enum("TuyaDatapointType", is_class=True)
@@ -226,20 +207,18 @@ def assign_declare_id(value):
     return value
 
 
-def _validate_mcu_watchdog(config: ConfigType) -> ConfigType:
-    if config[CONF_ACTION] != ACTION_RESET:
-        return config
-    cv.only_on(RESET_PLATFORMS)(config)
-    return config
-
-
 def _validate_heartbeat(config: ConfigType) -> ConfigType:
     # runs before the defaults: only a watchdog set in the config is rejected
-    if cv.boolean(config.get(CONF_HEARTBEAT, True)):
-        return config
+    if not isinstance(config, dict):
+        return config  # the schema reports the wrong type
+    try:
+        if cv.boolean(config.get(CONF_HEARTBEAT, True)):
+            return config
+    except cv.Invalid:
+        return config  # the schema reports it at the key
     watchdog = config.get(CONF_MCU_WATCHDOG) or {}
     if not isinstance(watchdog, dict):
-        return config  # the schema reports the wrong type
+        return config
     action = str(watchdog.get(CONF_ACTION, "")).lower()
     if CONF_MCU_WATCHDOG in config and action != ACTION_DISABLE:
         raise cv.Invalid(
@@ -250,6 +229,25 @@ def _validate_heartbeat(config: ConfigType) -> ConfigType:
 
 
 CONF_TUYA_ID = "tuya_id"
+
+# the options of each action: one without effect is rejected
+MCU_WATCHDOG_SCHEMA = cv.typed_schema(
+    {
+        ACTION_REBOOT: cv.Schema(
+            {
+                cv.Optional(CONF_MISSED_HEARTBEATS, default=6): cv.int_range(
+                    min=1, max=20
+                ),
+            }
+        ),
+        ACTION_DISABLE: cv.Schema({}),
+    },
+    key=CONF_ACTION,
+    default_type=ACTION_REBOOT,
+    lower=True,
+)
+
+
 CONFIG_SCHEMA = cv.All(
     _validate_heartbeat,
     cv.Schema(
@@ -262,26 +260,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_STATUS_PIN): pins.gpio_output_pin_schema,
             cv.Optional(CONF_HEARTBEAT, default=True): cv.boolean,
             cv.Optional(CONF_DATAPOINT_ACK, default=False): cv.boolean,
-            cv.Optional(CONF_MCU_WATCHDOG, default={}): cv.All(
-                cv.Schema(
-                    {
-                        cv.Optional(CONF_ACTION, default=ACTION_REBOOT): cv.one_of(
-                            ACTION_REBOOT, ACTION_RESET, ACTION_DISABLE, lower=True
-                        ),
-                        cv.Optional(CONF_MISSED_HEARTBEATS, default=6): cv.int_range(
-                            min=1, max=20
-                        ),
-                        cv.Optional(CONF_RESET_TIME, default="500ms"): cv.All(
-                            cv.positive_time_period_milliseconds,
-                            cv.Range(
-                                min=cv.TimePeriod(milliseconds=50),
-                                max=cv.TimePeriod(seconds=5),
-                            ),
-                        ),
-                    }
-                ),
-                _validate_mcu_watchdog,
-            ),
+            cv.Optional(CONF_MCU_WATCHDOG, default={}): MCU_WATCHDOG_SCHEMA,
             # Tuya weather service: the MCU enables it (0x20) and asks for data (0x34/0x03); the component
             # answers with the states of the entities given per Tuya key (sensor ids for numeric keys and
             # w.windSpeed, text_sensor ids for string keys), skipping keys without a value, and fires
@@ -326,42 +305,6 @@ CONFIG_SCHEMA = cv.All(
 )
 
 
-def _final_validate(config: ConfigType) -> ConfigType:
-    watchdog = config[CONF_MCU_WATCHDOG]
-    if watchdog[CONF_ACTION] != ACTION_RESET:
-        return config
-    path = [CONF_MCU_WATCHDOG, CONF_ACTION]
-    fconf = fv.full_config.get()
-    bus = fconf.get_config_for_path(fconf.get_path_for_id(config[CONF_UART_ID])[:-1])
-    if str(bus[CONF_ID].type) not in uart.NATIVE_UART_CLASSES:
-        raise cv.Invalid(
-            f"{CONF_ACTION}: {ACTION_RESET} requires a UART bus of the microcontroller itself",
-            path=path,
-        )
-    if CONF_TX_PIN not in bus:
-        raise cv.Invalid(
-            f"{CONF_ACTION}: {ACTION_RESET} requires a UART bus with a {CONF_TX_PIN}",
-            path=path,
-        )
-    if bus[CONF_TX_PIN][CONF_INVERTED]:
-        raise cv.Invalid(
-            f"{CONF_ACTION}: {ACTION_RESET} requires a UART bus with a {CONF_TX_PIN} that is not inverted",
-            path=path,
-        )
-    return config
-
-
-FINAL_VALIDATE_SCHEMA = _final_validate
-
-
-def _uart_bus_config(uart_id: ID) -> ConfigType:
-    """Return the config of the UART bus declared with uart_id."""
-    for bus in CORE.config[uart.DOMAIN]:
-        if bus[CONF_ID].id == uart_id.id:
-            return bus
-    raise KeyError(uart_id.id)
-
-
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
@@ -380,16 +323,6 @@ async def to_code(config):
     if config[CONF_HEARTBEAT] and watchdog[CONF_ACTION] != ACTION_DISABLE:
         cg.add_define("USE_TUYA_MCU_WATCHDOG")
         cg.add(var.set_mcu_watchdog(watchdog[CONF_MISSED_HEARTBEATS]))
-        if watchdog[CONF_ACTION] == ACTION_RESET:
-            cg.add_define("USE_TUYA_MCU_WATCHDOG_RESET")
-            # the pin object of the bus: the break is sent on its TX line
-            bus = _uart_bus_config(config[CONF_UART_ID])
-            tx_pin = await cg.get_variable(bus[CONF_TX_PIN][CONF_ID])
-            cg.add(
-                var.set_mcu_watchdog_reset(
-                    tx_pin, watchdog[CONF_RESET_TIME].total_milliseconds
-                )
-            )
     if CONF_IGNORE_MCU_UPDATE_ON_DATAPOINTS in config:
         for dp in config[CONF_IGNORE_MCU_UPDATE_ON_DATAPOINTS]:
             cg.add(var.add_ignore_mcu_update_on_datapoints(dp))
