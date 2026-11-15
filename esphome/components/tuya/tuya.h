@@ -109,6 +109,13 @@ struct TuyaWeatherValue {
   std::string value_string;
 };
 
+/// What a queued 0x21 frame carries
+enum class TuyaWeatherFrame : uint8_t {
+  VALUES,  // values of a send_weather() call outside a request
+  ANSWER,  // collected answer to the MCU
+  DEMAND,  // collected, complete answer to 0x34/0x03: its ack starts the 20 min limit
+};
+
 class Tuya final : public Component, public uart::UARTDevice {
  public:
   float get_setup_priority() const override { return setup_priority::LATE; }
@@ -259,13 +266,17 @@ class Tuya final : public Component, public uart::UARTDevice {
   void answer_weather_enable_();
   void handle_weather_request_();
   void start_weather_interval_();
+  void update_weather_();
+  void start_weather_retry_();
+  void retry_weather_();
   void handle_weather_ack_();
+  void handle_weather_lost_();
   bool request_weather_();
   bool collect_weather_(std::vector<uint8_t> &payload);
   bool build_weather_payload_(const std::vector<TuyaWeatherValue> &values, std::vector<uint8_t> &payload,
                               bool &dropped);
-  void queue_weather_frame_(std::vector<uint8_t> &&payload);
-  bool weather_frame_queued_() const;
+  void queue_weather_frame_(std::vector<uint8_t> &&payload, TuyaWeatherFrame kind);
+  bool weather_answer_queued_() const;
   bool weather_key_requested_(const std::string &key) const;
   bool weather_configured_ = false;       // weather: block present
   uint32_t weather_update_interval_ = 0;  // 0 = only on the MCU's requests
@@ -275,9 +286,11 @@ class Tuya final : public Component, public uart::UARTDevice {
   std::vector<std::string> weather_keys_;
   uint8_t weather_forecast_days_ = 0;  // w.date.N in the enable list: values w.<key>.<day> for day < N
   std::vector<TuyaWeatherValue> pending_weather_;
-  uint8_t weather_retries_ = 0;       // tries after an enable request that found no value
-  uint32_t last_weather_sent_ = 0;    // last frame the MCU acknowledged
-  uint32_t last_weather_demand_ = 0;  // last 0x34/0x03 that counted against the 20 min limit
+  std::vector<TuyaWeatherFrame> weather_frames_;  // kinds of the queued 0x21 frames, in queue order
+  bool weather_in_flight_ = false;                // the first of them is written and waits for its ack
+  uint8_t weather_retries_ = 0;                   // tries since the last acknowledged answer
+  uint32_t last_weather_sent_ = 0;                // last answer the MCU acknowledged
+  uint32_t last_weather_demand_ = 0;              // last acknowledged answer that counts against the 20 min limit
   CallbackManager<void(std::vector<std::string>)> weather_request_callback_{};
 #ifdef USE_SENSOR
   // keys are codegen literals

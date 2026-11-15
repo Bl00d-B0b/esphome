@@ -73,6 +73,9 @@ void Tuya::reset_weather_() {
   this->cancel_interval(WEATHER_RETRY_INTERVAL_ID);
   this->last_weather_sent_ = 0;
   this->last_weather_demand_ = 0;
+  this->weather_retries_ = 0;
+  this->weather_frames_.clear();
+  this->weather_in_flight_ = false;
   // frames for the service the MCU had enabled before
   if (this->expected_response_ == TuyaCommandType::WEATHER_DATA)
     this->expected_response_.reset();
@@ -93,6 +96,8 @@ void Tuya::handle_weather_enable_(const uint8_t *buffer, size_t len) {
     size_t key_len = buffer[i];
     if (key_len == 0 || i + 1 + key_len > len) {
       ESP_LOGW(TAG, "Weather enable request malformed at byte %u", (unsigned) i);
+      // the key list of an earlier request no longer holds
+      this->reset_weather_();
       this->send_command_(
           TuyaCommand{.cmd = TuyaCommandType::WEATHER_ENABLE, .payload = std::vector<uint8_t>{0x00, 0x01}});
       return;
@@ -118,26 +123,40 @@ void Tuya::handle_weather_enable_(const uint8_t *buffer, size_t len) {
 
 // First values after 0x20; without a frame the request is repeated until one goes out.
 void Tuya::answer_weather_enable_() {
+  this->weather_retries_ = 0;
   if (this->request_weather_())
     return;
   // nothing configured that could answer: values come from send_weather() calls only
   if (!this->weather_incomplete_ && this->weather_request_callback_.size() == 0)
     return;
   ESP_LOGW(TAG, "Weather service enabled, no value to send yet");
-  this->weather_retries_ = 0;
-  this->set_interval(WEATHER_RETRY_INTERVAL_ID, WEATHER_RETRY_INTERVAL, [this] {
-    if (++this->weather_retries_ >= WEATHER_MAX_RETRIES)
-      this->cancel_interval(WEATHER_RETRY_INTERVAL_ID);
-    if (!this->weather_frame_queued_())
-      this->request_weather_();
-  });
+  this->start_weather_retry_();
+}
+
+// An answer that found no value or got no ack is built again, at most WEATHER_MAX_RETRIES times.
+void Tuya::start_weather_retry_() {
+  this->set_interval(WEATHER_RETRY_INTERVAL_ID, WEATHER_RETRY_INTERVAL, [this] { this->retry_weather_(); });
+}
+
+void Tuya::retry_weather_() {
+  // its ack or its loss decides
+  if (this->weather_answer_queued_())
+    return;
+  this->weather_retries_++;
+  // a queued frame ends the retry
+  if (this->request_weather_())
+    return;
+  if (this->weather_retries_ >= WEATHER_MAX_RETRIES) {
+    this->cancel_interval(WEATHER_RETRY_INTERVAL_ID);
+    ESP_LOGW(TAG, "Weather service enabled, no value to send after %u tries, giving up", WEATHER_MAX_RETRIES);
+  }
 }
 
 // 0x34/0x03: the result byte goes out first, then the frame.
 void Tuya::handle_weather_request_() {
   uint32_t now = millis();
-  // a frame is on its way or was acknowledged within the last 5 s (the MCU sends 0x20 and 0x34/0x03 back to back)
-  bool answered = this->weather_frame_queued_() ||
+  // an answer is on its way or was acknowledged within the last 5 s (the MCU sends 0x20 and 0x34/0x03 back to back)
+  bool answered = this->weather_answer_queued_() ||
                   (this->last_weather_sent_ != 0 && now - this->last_weather_sent_ < WEATHER_REQUEST_DEBOUNCE);
   bool refused =
       !answered && this->last_weather_demand_ != 0 && now - this->last_weather_demand_ < WEATHER_DEMAND_MIN_INTERVAL;
@@ -164,29 +183,33 @@ void Tuya::handle_weather_request_() {
     ESP_LOGW(TAG, "MCU asked for weather data, nothing to send");
     return;
   }
-  if (!answered)
-    this->queue_weather_frame_(std::move(payload));
-  // only a complete answer counts against the 20 min limit
-  if (!this->weather_incomplete_)
-    this->last_weather_demand_ = now;
+  if (answered)
+    return;
+  this->weather_retries_ = 0;
+  // only a complete answer counts against the 20 min limit, and only once the MCU acknowledged it
+  this->queue_weather_frame_(std::move(payload),
+                             this->weather_incomplete_ ? TuyaWeatherFrame::ANSWER : TuyaWeatherFrame::DEMAND);
 }
 
 // Unrequested frames while the MCU has the service enabled.
 void Tuya::start_weather_interval_() {
   if (this->weather_update_interval_ == 0)
     return;
-  this->set_interval(WEATHER_INTERVAL_ID, this->weather_update_interval_, [this] {
-    // a request of the MCU was answered less than half an interval ago
-    if (this->last_weather_sent_ != 0 && millis() - this->last_weather_sent_ < this->weather_update_interval_ / 2)
-      return;
-    if (!this->weather_frame_queued_())
-      this->request_weather_();
-  });
+  this->set_interval(WEATHER_INTERVAL_ID, this->weather_update_interval_, [this] { this->update_weather_(); });
 }
 
-bool Tuya::weather_frame_queued_() const {
-  for (const auto &cmd : this->command_queue_) {
-    if (cmd.cmd == TuyaCommandType::WEATHER_DATA)
+void Tuya::update_weather_() {
+  // a request of the MCU was answered less than half an interval ago
+  if (this->last_weather_sent_ != 0 && millis() - this->last_weather_sent_ < this->weather_update_interval_ / 2)
+    return;
+  if (!this->weather_answer_queued_())
+    this->request_weather_();
+}
+
+// A collected answer is queued or waits for its ack; frames of send_weather() calls outside a request do not count.
+bool Tuya::weather_answer_queued_() const {
+  for (TuyaWeatherFrame kind : this->weather_frames_) {
+    if (kind != TuyaWeatherFrame::VALUES)
       return true;
   }
   return false;
@@ -211,19 +234,52 @@ bool Tuya::request_weather_() {
   std::vector<uint8_t> payload;
   if (!this->collect_weather_(payload))
     return false;
-  this->queue_weather_frame_(std::move(payload));
+  this->queue_weather_frame_(std::move(payload), TuyaWeatherFrame::ANSWER);
   return true;
 }
 
-void Tuya::queue_weather_frame_(std::vector<uint8_t> &&payload) {
-  this->send_command_(TuyaCommand{.cmd = TuyaCommandType::WEATHER_DATA, .payload = std::move(payload)});
+void Tuya::queue_weather_frame_(std::vector<uint8_t> &&payload, TuyaWeatherFrame kind) {
+  // before the command: it may be written at once
+  this->weather_frames_.push_back(kind);
   this->cancel_interval(WEATHER_RETRY_INTERVAL_ID);
+  this->send_command_(TuyaCommand{.cmd = TuyaCommandType::WEATHER_DATA, .payload = std::move(payload)});
 }
 
 // Empty 0x21 from the MCU: the frame arrived.
 void Tuya::handle_weather_ack_() {
+  // a late ack of a frame that was already given up
+  if (!this->weather_in_flight_ || this->weather_frames_.empty()) {
+    ESP_LOGD(TAG, "Weather ack without a frame waiting for it, ignored");
+    return;
+  }
+  this->weather_in_flight_ = false;
+  TuyaWeatherFrame kind = this->weather_frames_.front();
+  this->weather_frames_.erase(this->weather_frames_.begin());
   ESP_LOGV(TAG, "Weather data acknowledged by the MCU");
-  this->last_weather_sent_ = millis();
+  if (kind == TuyaWeatherFrame::VALUES)
+    return;
+  uint32_t now = millis();
+  this->weather_retries_ = 0;
+  this->last_weather_sent_ = now;
+  if (kind == TuyaWeatherFrame::DEMAND)
+    this->last_weather_demand_ = now;
+}
+
+// A 0x21 frame got no ack: a collected answer is built again later.
+void Tuya::handle_weather_lost_() {
+  ESP_LOGW(TAG, "Weather data not acknowledged by the MCU");
+  this->weather_in_flight_ = false;
+  if (this->weather_frames_.empty())
+    return;
+  TuyaWeatherFrame kind = this->weather_frames_.front();
+  this->weather_frames_.erase(this->weather_frames_.begin());
+  if (kind == TuyaWeatherFrame::VALUES)
+    return;
+  if (this->weather_retries_ >= WEATHER_MAX_RETRIES) {
+    ESP_LOGW(TAG, "Weather data not acknowledged after %u tries, giving up", WEATHER_MAX_RETRIES);
+    return;
+  }
+  this->start_weather_retry_();
 }
 
 // Values of a request: automations first (their send_weather() calls are collected), then the configured sources
@@ -319,7 +375,7 @@ bool Tuya::send_weather(const std::vector<TuyaWeatherValue> &values) {
   bool dropped = false;
   if (!this->build_weather_payload_(values, payload, dropped))
     return false;
-  this->queue_weather_frame_(std::move(payload));
+  this->queue_weather_frame_(std::move(payload), TuyaWeatherFrame::VALUES);
   return true;
 }
 

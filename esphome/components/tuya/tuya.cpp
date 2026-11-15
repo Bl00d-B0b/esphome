@@ -422,7 +422,7 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
         this->set_timeout("datapoint_dump", 1000, [this] { this->dump_config(); });
         this->initialized_callback_.call();
         // a request the MCU made during the initialization got no frame
-        if (this->weather_enabled_ && !this->weather_frame_queued_())
+        if (this->weather_enabled_ && !this->weather_answer_queued_())
           this->answer_weather_enable_();
       }
       // a sync report has its own answer below
@@ -673,6 +673,7 @@ void Tuya::send_raw_command_(TuyaCommand command) {
       break;
     case TuyaCommandType::WEATHER_DATA:
       this->expected_response_ = TuyaCommandType::WEATHER_DATA;
+      this->weather_in_flight_ = true;
       break;
     default:
       break;
@@ -711,9 +712,8 @@ void Tuya::process_command_queue_() {
     } else {
       this->resent_ = false;
       const TuyaCommandType dropped = this->command_queue_.front().cmd;
-      if (dropped == TuyaCommandType::WEATHER_DATA) {
-        ESP_LOGW(TAG, "Weather data not acknowledged by the MCU");
-      }
+      if (dropped == TuyaCommandType::WEATHER_DATA)
+        this->handle_weather_lost_();
       this->command_queue_.erase(command_queue_.begin());
       if (this->init_state_ != TuyaInitState::INIT_DONE) {
         if (dropped == init_step_query(this->init_state_)) {
