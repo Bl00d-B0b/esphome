@@ -8,15 +8,22 @@
 #include "esphome/core/helpers.h"
 #include "esphome/components/uart/uart.h"
 
+// 2026.10.2 build as an external component: the weather service is always compiled in
+#ifndef USE_TUYA_WEATHER
+#define USE_TUYA_WEATHER
+#endif
+
 #ifdef USE_TIME
 #include "esphome/components/time/real_time_clock.h"
 #include "esphome/core/time.h"
 #endif
+#ifdef USE_TUYA_WEATHER
 #ifdef USE_SENSOR
 #include "esphome/components/sensor/sensor.h"
 #endif
 #ifdef USE_TEXT_SENSOR
 #include "esphome/components/text_sensor/text_sensor.h"
+#endif
 #endif
 
 namespace esphome::tuya {
@@ -168,9 +175,9 @@ class Tuya final : public Component, public uart::UARTDevice {
   template<typename F> void add_on_weather_request_callback(F &&callback) {
     this->weather_request_callback_.add(std::forward<F>(callback));
   }
-  /// Send weather values to the MCU (0x21). Inside the request callback the values are collected into the
-  /// answer frame; outside it a frame goes out at once. Keys the MCU did not ask for are skipped. Returns false
-  /// when nothing was queued (service not enabled, MCU not initialised, no values).
+  /// Send weather values (0x21). Returns false when nothing was queued.
+  /// Inside the request callback the values only join the answer frame and the result is always true;
+  /// keys the MCU did not ask for and values that are too long are dropped when the frame is built.
   bool send_weather(const std::vector<TuyaWeatherValue> &values);
 
  protected:
@@ -246,21 +253,30 @@ class Tuya final : public Component, public uart::UARTDevice {
   CallbackManager<void()> initialized_callback_{};
 
   // Weather service
+  void dump_weather_config_();
+  void reset_weather_();
   void handle_weather_enable_(const uint8_t *buffer, size_t len);
-  void arm_weather_timeout_();
-  bool request_weather_(uint32_t now);
-  bool send_weather_frame_(std::vector<TuyaWeatherValue> values);
+  void answer_weather_enable_();
+  void handle_weather_request_();
+  void start_weather_interval_();
+  void handle_weather_ack_();
+  bool request_weather_();
+  bool collect_weather_(std::vector<uint8_t> &payload);
+  bool build_weather_payload_(const std::vector<TuyaWeatherValue> &values, std::vector<uint8_t> &payload,
+                              bool &dropped);
+  void queue_weather_frame_(std::vector<uint8_t> &&payload);
   bool weather_frame_queued_() const;
   bool weather_key_requested_(const std::string &key) const;
   bool weather_configured_ = false;       // weather: block present
   uint32_t weather_update_interval_ = 0;  // 0 = only on the MCU's requests
   bool weather_enabled_ = false;          // MCU sent 0x20 (or 0x34/0x03)
-  bool collecting_weather_ = false;       // inside request_weather_: send_weather() collects into pending_weather_
+  bool collecting_weather_ = false;       // inside collect_weather_: send_weather() collects into pending_weather_
   bool weather_incomplete_ = false;       // last answer left out a value (no state, out of range, too long)
   std::vector<std::string> weather_keys_;
   uint8_t weather_forecast_days_ = 0;  // w.date.N in the enable list: values w.<key>.<day> for day < N
   std::vector<TuyaWeatherValue> pending_weather_;
-  uint32_t last_weather_sent_ = 0;    // last answer that sent a frame
+  uint8_t weather_retries_ = 0;       // tries after an enable request that found no value
+  uint32_t last_weather_sent_ = 0;    // last frame the MCU acknowledged
   uint32_t last_weather_demand_ = 0;  // last 0x34/0x03 that counted against the 20 min limit
   CallbackManager<void(std::vector<std::string>)> weather_request_callback_{};
 #ifdef USE_SENSOR
