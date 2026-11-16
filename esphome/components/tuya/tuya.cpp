@@ -636,6 +636,12 @@ void Tuya::send_raw_command_(TuyaCommand command) {
   uint8_t version = 0;
 
   this->last_command_timestamp_ = millis();
+  // a reply cannot come before the frame has left: header, payload and checksum at the settings of the bus
+  uint32_t baud_rate = this->parent_->get_baud_rate();
+  uint32_t frame_bits = static_cast<uint32_t>(7 + command.payload.size()) *
+                        (1 + this->parent_->get_data_bits() + this->parent_->get_stop_bits() +
+                         (this->parent_->get_parity() != uart::UART_CONFIG_PARITY_NONE ? 1 : 0));
+  this->command_tx_time_ = baud_rate == 0 ? 0 : frame_bits * 1000 / baud_rate;
   switch (command.cmd) {
     case TuyaCommandType::HEARTBEAT:
       this->expected_response_ = TuyaCommandType::HEARTBEAT;
@@ -683,7 +689,7 @@ void Tuya::process_command_queue_() {
     this->rx_message_.clear();
   }
 
-  if (this->expected_response_.has_value() && delay > RESPONSE_TIMEOUT) {
+  if (this->expected_response_.has_value() && delay > RESPONSE_TIMEOUT + this->command_tx_time_) {
     this->expected_response_.reset();
     if (!this->resent_) {
       // stays at the front of the queue and is sent once more

@@ -5,7 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include "esphome/core/hal.h"
+#include "esphome/core/application.h"
 #include "esphome/core/log.h"
 
 namespace esphome::tuya {
@@ -26,6 +26,8 @@ static constexpr uint8_t WEATHER_MAX_RETRIES = 10;
 static constexpr size_t WEATHER_MAX_PAYLOAD = 1024;
 // Tuya's MCU SDK copies a string value into a 100 byte buffer
 static constexpr size_t WEATHER_MAX_STRING = 99;
+// Requested keys in the debug line
+static constexpr size_t WEATHER_KEY_LOG_SIZE = 128;
 
 // w.<key>.<day>, day 0 = today
 static bool weather_key_has_day(const std::string &key) {
@@ -135,10 +137,16 @@ void Tuya::answer_weather_enable_() {
 
 // An answer that found no value or got no ack is built again, at most WEATHER_MAX_RETRIES times.
 void Tuya::start_weather_retry_() {
+  this->skip_weather_retry_ = true;
   this->set_interval(WEATHER_RETRY_INTERVAL_ID, WEATHER_RETRY_INTERVAL, [this] { this->retry_weather_(); });
 }
 
 void Tuya::retry_weather_() {
+  // set_interval runs first after a short random offset: the first try is one full interval later
+  if (this->skip_weather_retry_) {
+    this->skip_weather_retry_ = false;
+    return;
+  }
   // its ack or its loss decides
   if (this->weather_answer_queued_())
     return;
@@ -154,7 +162,7 @@ void Tuya::retry_weather_() {
 
 // 0x34/0x03: the result byte goes out first, then the frame.
 void Tuya::handle_weather_request_() {
-  uint32_t now = millis();
+  uint32_t now = App.get_loop_component_start_time();
   // an answer is on its way or was acknowledged within the last 5 s (the MCU sends 0x20 and 0x34/0x03 back to back)
   bool answered = this->weather_answer_queued_() ||
                   (this->last_weather_sent_ != 0 && now - this->last_weather_sent_ < WEATHER_REQUEST_DEBOUNCE);
@@ -195,12 +203,19 @@ void Tuya::handle_weather_request_() {
 void Tuya::start_weather_interval_() {
   if (this->weather_update_interval_ == 0)
     return;
+  this->skip_weather_update_ = true;
   this->set_interval(WEATHER_INTERVAL_ID, this->weather_update_interval_, [this] { this->update_weather_(); });
 }
 
 void Tuya::update_weather_() {
+  // set_interval runs first after a short random offset: the first frame is one full interval later
+  if (this->skip_weather_update_) {
+    this->skip_weather_update_ = false;
+    return;
+  }
   // a request of the MCU was answered less than half an interval ago
-  if (this->last_weather_sent_ != 0 && millis() - this->last_weather_sent_ < this->weather_update_interval_ / 2)
+  if (this->last_weather_sent_ != 0 &&
+      App.get_loop_component_start_time() - this->last_weather_sent_ < this->weather_update_interval_ / 2)
     return;
   if (!this->weather_answer_queued_())
     this->request_weather_();
@@ -258,7 +273,7 @@ void Tuya::handle_weather_ack_() {
   ESP_LOGV(TAG, "Weather data acknowledged by the MCU");
   if (kind == TuyaWeatherFrame::VALUES)
     return;
-  uint32_t now = millis();
+  uint32_t now = App.get_loop_component_start_time();
   this->weather_retries_ = 0;
   this->last_weather_sent_ = now;
   if (kind == TuyaWeatherFrame::DEMAND)
@@ -291,23 +306,30 @@ bool Tuya::collect_weather_(std::vector<uint8_t> &payload) {
     return false;
   }
 #if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG
-  std::string list;
+  // a list that does not fit is cut
+  char list[WEATHER_KEY_LOG_SIZE];
+  size_t used = 0;
+  list[0] = '\0';
   for (const auto &key : this->weather_keys_) {
-    if (!list.empty())
-      list += ", ";
-    list += key;
+    int n = snprintf(list + used, sizeof(list) - used, "%s%s", used == 0 ? "" : ", ", key.c_str());
+    if (n < 0 || static_cast<size_t>(n) >= sizeof(list) - used)
+      break;
+    used += n;
   }
-  ESP_LOGD(TAG, "Weather data requested: %s", list.c_str());
+  ESP_LOGD(TAG, "Weather data requested: %s", list);
 #endif
-  this->pending_weather_.clear();
+  // pending_weather_ keeps its storage from one request to the next
+  std::vector<TuyaWeatherValue> &values = this->pending_weather_;
+  values.clear();
   this->collecting_weather_ = true;
   this->weather_request_callback_.call(this->weather_keys_);
   this->collecting_weather_ = false;
-  std::vector<TuyaWeatherValue> values = std::move(this->pending_weather_);
-  this->pending_weather_.clear();
 
 #ifdef USE_SENSOR
   for (auto &src : this->weather_sensors_) {
+    // a source for a key the MCU did not ask for does not make the answer incomplete
+    if (!this->weather_key_requested_(src.first))
+      continue;
     if (weather_has_key(values, src.first))
       continue;  // answered by an automation
     float state = src.second->state;
@@ -333,6 +355,8 @@ bool Tuya::collect_weather_(std::vector<uint8_t> &payload) {
 #endif
 #ifdef USE_TEXT_SENSOR
   for (auto &src : this->weather_text_sensors_) {
+    if (!this->weather_key_requested_(src.first))
+      continue;
     if (weather_has_key(values, src.first))
       continue;
     if (!src.second->has_state() || src.second->state.empty()) {
@@ -351,6 +375,7 @@ bool Tuya::collect_weather_(std::vector<uint8_t> &payload) {
   bool built = this->build_weather_payload_(values, payload, dropped);
   if (dropped)
     this->weather_incomplete_ = true;
+  values.clear();
   return built;
 }
 

@@ -226,6 +226,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   int reset_pin_reported_ = -1;
   uint32_t last_command_timestamp_ = 0;
   uint32_t last_rx_char_timestamp_ = 0;
+  uint32_t command_tx_time_ = 0;  // time on the wire of the last command sent
   bool working_mode_received_{false};
   bool resent_{false};
   std::string product_;
@@ -269,6 +270,8 @@ class Tuya final : public Component, public uart::UARTDevice {
   std::vector<TuyaWeatherValue> pending_weather_;
   std::vector<TuyaWeatherFrame> weather_frames_;  // kinds of the queued 0x21 frames, in queue order
   bool weather_in_flight_ = false;                // the first of them is written and waits for its ack
+  bool skip_weather_retry_ = false;               // the retry timer has not run yet
+  bool skip_weather_update_ = false;              // the update_interval timer has not run yet
   uint8_t weather_retries_ = 0;                   // tries since the last acknowledged answer
   uint32_t last_weather_sent_ = 0;                // last answer the MCU acknowledged
   uint32_t last_weather_demand_ = 0;              // last acknowledged answer that counts against the 20 min limit
