@@ -272,6 +272,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   bool weather_in_flight_ = false;                // the first of them is written and waits for its ack
   bool skip_weather_retry_ = false;               // the retry timer has not run yet
   bool skip_weather_update_ = false;              // the update_interval timer has not run yet
+  bool weather_update_empty_ = false;             // the last update_interval tick found no value, warned once
   uint8_t weather_retries_ = 0;                   // tries since the last acknowledged answer
   uint32_t last_weather_sent_ = 0;                // last answer the MCU acknowledged
   uint32_t last_weather_demand_ = 0;              // last acknowledged answer that counts against the 20 min limit

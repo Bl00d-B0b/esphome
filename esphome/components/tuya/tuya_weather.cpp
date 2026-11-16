@@ -76,6 +76,7 @@ void Tuya::reset_weather_() {
   this->last_weather_sent_ = 0;
   this->last_weather_demand_ = 0;
   this->weather_retries_ = 0;
+  this->weather_update_empty_ = false;
   this->weather_frames_.clear();
   this->weather_in_flight_ = false;
   // frames for the service the MCU had enabled before
@@ -129,8 +130,19 @@ void Tuya::answer_weather_enable_() {
   if (this->request_weather_())
     return;
   // nothing configured that could answer: values come from send_weather() calls only
-  if (!this->weather_incomplete_ && this->weather_request_callback_.size() == 0)
+  if (!this->weather_incomplete_ && this->weather_request_callback_.size() == 0) {
+    size_t sources = 0;
+#ifdef USE_SENSOR
+    sources += this->weather_sensors_.size();
+#endif
+#ifdef USE_TEXT_SENSOR
+    sources += this->weather_text_sensors_.size();
+#endif
+    if (sources != 0) {
+      ESP_LOGW(TAG, "Weather service enabled, the MCU asked for none of the %u configured keys", (unsigned) sources);
+    }
     return;
+  }
   ESP_LOGW(TAG, "Weather service enabled, no value to send yet");
   this->start_weather_retry_();
 }
@@ -217,8 +229,17 @@ void Tuya::update_weather_() {
   if (this->last_weather_sent_ != 0 &&
       App.get_loop_component_start_time() - this->last_weather_sent_ < this->weather_update_interval_ / 2)
     return;
-  if (!this->weather_answer_queued_())
-    this->request_weather_();
+  if (this->weather_answer_queued_())
+    return;
+  if (this->request_weather_()) {
+    this->weather_update_empty_ = false;
+    return;
+  }
+  // once per streak
+  if (!this->weather_update_empty_) {
+    this->weather_update_empty_ = true;
+    ESP_LOGW(TAG, "Weather update: no value to send");
+  }
 }
 
 // A collected answer is queued or waits for its ack; frames of send_weather() calls outside a request do not count.
@@ -340,7 +361,12 @@ bool Tuya::collect_weather_(std::vector<uint8_t> &payload) {
     }
     if (strncmp(src.first, "w.windSpeed", 11) == 0) {  // also the forecast keys w.windSpeed.<day>
       char buf[16];
-      snprintf(buf, sizeof(buf), "%.1f", state);
+      int n = snprintf(buf, sizeof(buf), "%.1f", state);
+      if (n < 0 || static_cast<size_t>(n) >= sizeof(buf)) {
+        ESP_LOGW(TAG, "Weather %s: %.0f does not fit, not sent", src.first, state);
+        this->weather_incomplete_ = true;
+        continue;
+      }
       values.push_back(TuyaWeatherValue{src.first, true, 0, buf});
     } else {
       float rounded = roundf(state);
