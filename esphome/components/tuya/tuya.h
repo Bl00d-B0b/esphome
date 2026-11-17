@@ -198,6 +198,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   void set_status_pin_();
   void set_heartbeat_interval_(uint32_t interval);
   void retry_init_();
+  void log_init_failure_();
   void start_network_status_();
   void send_wifi_status_();
   uint8_t get_wifi_status_code_();
@@ -208,6 +209,8 @@ class Tuya final : public Component, public uart::UARTDevice {
   uint8_t watchdog_missed_heartbeats_{0};
   uint8_t heartbeat_misses_{0};
   uint8_t heartbeat_answers_{0};
+#else
+  bool heartbeat_missed_{false};  // unanswered heartbeat logged, until the next reply
 #endif
 #ifdef USE_TIME
   void send_local_time_();
@@ -220,6 +223,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   bool init_failed_{false};
   bool init_failure_logged_{false};
   TuyaInitState init_failure_state_{TuyaInitState::INIT_HEARTBEAT};  // step of the last logged failure
+  uint8_t wifi_status_retries_{0};  // heartbeat: false, WiFi status sends without a reply
   uint8_t protocol_version_ = -1;
   InternalGPIOPin *status_pin_{nullptr};
   int status_pin_reported_ = -1;

@@ -97,6 +97,9 @@ void Tuya::retry_init_() {
       this->send_empty_command_(TuyaCommandType::PRODUCT_QUERY);
       break;
     case TuyaInitState::INIT_WIFI:
+      // the status has no reply timeout: the third retry without a reply is the failure
+      if (this->wifi_status_retries_ < 3 && ++this->wifi_status_retries_ == 3)
+        this->log_init_failure_();
       // sent again by the status interval
       this->wifi_status_ = -1;
       break;
@@ -108,6 +111,14 @@ void Tuya::retry_init_() {
   }
 }
 
+void Tuya::log_init_failure_() {
+  if (this->init_failure_logged_ && this->init_failure_state_ == this->init_state_)
+    return;
+  this->init_failure_logged_ = true;
+  this->init_failure_state_ = this->init_state_;
+  ESP_LOGE(TAG, "Initialization failed at init_state %u", static_cast<uint8_t>(this->init_state_));
+}
+
 void Tuya::start_network_status_() {
   if (this->status_pin_ != nullptr) {
     this->init_state_ = TuyaInitState::INIT_DATAPOINT;
@@ -116,6 +127,7 @@ void Tuya::start_network_status_() {
   } else {
     this->init_state_ = TuyaInitState::INIT_WIFI;
     this->wifi_status_ = -1;
+    this->wifi_status_retries_ = 0;
     this->set_interval("wifi", 1000, [this] { this->send_wifi_status_(); });
   }
 }
@@ -263,6 +275,9 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
     case TuyaCommandType::HEARTBEAT:
       ESP_LOGV(TAG, "MCU Heartbeat (0x%02X)", buffer[0]);
       this->protocol_version_ = version;
+#ifndef USE_TUYA_MCU_WATCHDOG
+      this->heartbeat_missed_ = false;
+#endif
       // a failed initialization starts again with the next heartbeat reply
       if (this->init_failed_) {
         this->init_failed_ = false;
@@ -704,18 +719,22 @@ void Tuya::process_command_queue_() {
         if (dropped == init_step_query(this->init_state_)) {
           // without a heartbeat the step is tried again by retry_init_
           this->init_failed_ = this->heartbeat_;
-          if (!this->init_failure_logged_ || this->init_failure_state_ != this->init_state_) {
-            this->init_failure_logged_ = true;
-            this->init_failure_state_ = this->init_state_;
-            ESP_LOGE(TAG, "Initialization failed at init_state %u", static_cast<uint8_t>(this->init_state_));
-          }
+          this->log_init_failure_();
         } else {
           ESP_LOGD(TAG, "Command 0x%02X got no reply at init_state %u", static_cast<uint8_t>(dropped),
                    static_cast<uint8_t>(this->init_state_));
         }
       } else if (dropped == TuyaCommandType::DATAPOINT_DELIVER) {
         ESP_LOGW(TAG, "Datapoint command got no report from the MCU, dropped");
-      } else if (dropped != TuyaCommandType::HEARTBEAT) {
+      } else if (dropped == TuyaCommandType::HEARTBEAT) {
+#ifndef USE_TUYA_MCU_WATCHDOG
+        // once until the next reply; with the watchdog the misses are counted below
+        if (!this->heartbeat_missed_) {
+          this->heartbeat_missed_ = true;
+          ESP_LOGW(TAG, "MCU does not answer heartbeats");
+        }
+#endif
+      } else {
         ESP_LOGD(TAG, "Command 0x%02X got no reply, dropped", static_cast<uint8_t>(dropped));
       }
 #ifdef USE_TUYA_MCU_WATCHDOG

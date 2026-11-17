@@ -200,7 +200,11 @@ void Tuya::handle_weather_request_() {
     return;
   }
   if (failed) {
-    ESP_LOGW(TAG, "MCU asked for weather data, nothing to send");
+    if (this->init_state_ != TuyaInitState::INIT_DONE) {
+      ESP_LOGW(TAG, "MCU asked for weather data before it is initialised, not sent");
+    } else {
+      ESP_LOGW(TAG, "MCU asked for weather data, nothing to send");
+    }
     return;
   }
   if (answered)
