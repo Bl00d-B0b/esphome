@@ -98,8 +98,11 @@ void Tuya::retry_init_() {
       break;
     case TuyaInitState::INIT_WIFI:
       // the status has no reply timeout: the third retry without a reply is the failure
-      if (this->wifi_status_retries_ < 3 && ++this->wifi_status_retries_ == 3)
-        this->log_init_failure_();
+      if (this->wifi_status_retries_ < 3) {
+        this->wifi_status_retries_++;
+        if (this->wifi_status_retries_ == 3)
+          this->log_init_failure_();
+      }
       // sent again by the status interval
       this->wifi_status_ = -1;
       break;
