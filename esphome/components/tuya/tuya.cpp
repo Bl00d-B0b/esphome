@@ -67,6 +67,13 @@ void Tuya::setup() {
 }
 
 void Tuya::loop() {
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+  if (this->tx_break_active_) {
+    if (millis() - this->tx_break_start_ < this->watchdog_reset_time_)
+      return;
+    this->end_tx_break_();
+  }
+#endif
   // Read all available bytes in batches to reduce UART call overhead.
   size_t avail = this->available();
   uint8_t buf[64];
@@ -80,6 +87,11 @@ void Tuya::loop() {
     for (size_t i = 0; i < to_read; i++) {
       this->handle_char_(buf[i]);
     }
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+    // a reply handled above can start the break, nothing more is read then
+    if (this->tx_break_active_)
+      return;
+#endif
   }
   process_command_queue_();
 }
@@ -142,9 +154,19 @@ void Tuya::dump_config() {
   }
 #ifdef USE_TUYA_MCU_WATCHDOG
   if (this->watchdog_missed_heartbeats_ != 0) {
-    ESP_LOGCONFIG(TAG, "  MCU Watchdog: reboot after %u unanswered heartbeats", this->watchdog_missed_heartbeats_);
-    if (!this->working_mode_received_) {
-      ESP_LOGCONFIG(TAG, "  MCU Watchdog is not armed before the working mode reply of the MCU");
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+    if (this->watchdog_reset_time_ != 0) {
+      ESP_LOGCONFIG(TAG,
+                    "  MCU Watchdog: reset after %u unanswered heartbeats\n"
+                    "  Reset Time: %" PRIu32 " ms, MCU Resets: %" PRIu32,
+                    this->watchdog_missed_heartbeats_, this->watchdog_reset_time_, this->mcu_resets_);
+    } else
+#endif
+    {
+      ESP_LOGCONFIG(TAG, "  MCU Watchdog: reboot after %u unanswered heartbeats", this->watchdog_missed_heartbeats_);
+      if (!this->working_mode_received_) {
+        ESP_LOGCONFIG(TAG, "  MCU Watchdog is not armed before the working mode reply of the MCU");
+      }
     }
   }
 #endif
@@ -280,6 +302,13 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
       this->protocol_version_ = version;
 #ifndef USE_TUYA_MCU_WATCHDOG
       this->heartbeat_missed_ = false;
+#endif
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+      if (this->tx_break_unconfirmed_) {
+        this->tx_break_unconfirmed_ = false;
+        this->status_clear_warning();
+        ESP_LOGI(TAG, "MCU answers heartbeats again after the reset");
+      }
 #endif
       // a failed initialization starts again with the next heartbeat reply
       if (this->init_failed_) {
@@ -747,6 +776,12 @@ void Tuya::process_command_queue_() {
     }
   }
 
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+  // nothing is written while TX is held low
+  if (this->tx_break_active_)
+    return;
+#endif
+
   // Left check of delay since last command in case there's ever a command sent by calling send_raw_command_ directly
   if (delay > COMMAND_DELAY && !this->command_queue_.empty() && this->rx_message_.empty() &&
       !this->expected_response_.has_value()) {
@@ -762,6 +797,18 @@ void Tuya::note_missed_heartbeat_() {
   if (this->watchdog_missed_heartbeats_ == 0 || ++this->heartbeat_misses_ < this->watchdog_missed_heartbeats_)
     return;
   this->heartbeat_misses_ = 0;
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+  if (this->watchdog_reset_time_ != 0) {
+    if (this->tx_break_unconfirmed_) {
+      ESP_LOGE(TAG, "MCU left %u heartbeats unanswered after a reset, holding TX low again",
+               this->watchdog_missed_heartbeats_);
+    } else {
+      ESP_LOGW(TAG, "MCU left %u heartbeats unanswered, holding TX low", this->watchdog_missed_heartbeats_);
+    }
+    this->start_tx_break_();
+    return;
+  }
+#endif
   // Tuya's module firmware does not reset itself before the working mode reply
   if (!this->working_mode_received_) {
     ESP_LOGW(TAG, "MCU left %u heartbeats unanswered before the working mode reply, not rebooting",
@@ -771,6 +818,35 @@ void Tuya::note_missed_heartbeat_() {
   ESP_LOGE(TAG, "MCU left %u heartbeats unanswered, rebooting", this->watchdog_missed_heartbeats_);
   App.safe_reboot();
 }
+
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+void Tuya::start_tx_break_() {
+  this->flush();
+  if (!this->parent_->set_tx_break(true)) {
+    ESP_LOGE(TAG, "UART bus cannot hold TX low, rebooting");
+    App.safe_reboot();
+    return;
+  }
+  this->tx_break_start_ = millis();
+  this->tx_break_active_ = true;
+  this->tx_break_unconfirmed_ = true;
+  this->mcu_resets_++;
+  // until the MCU answers a heartbeat again
+  this->status_set_warning(LOG_STR("MCU does not answer heartbeats"));
+}
+
+void Tuya::end_tx_break_() {
+  this->tx_break_active_ = false;
+  if (!this->parent_->set_tx_break(false)) {
+    // another break cannot bring the bus back
+    ESP_LOGE(TAG, "UART bus did not release TX after the MCU reset, rebooting");
+    App.safe_reboot();
+    return;
+  }
+  this->rx_message_.clear();
+  this->send_empty_command_(TuyaCommandType::DATAPOINT_QUERY);
+}
+#endif  // USE_TUYA_MCU_WATCHDOG_RESET
 #endif  // USE_TUYA_MCU_WATCHDOG
 
 void Tuya::send_command_(const TuyaCommand &command) {

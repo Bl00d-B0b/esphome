@@ -127,6 +127,28 @@ void LibreTinyUARTComponent::setup() {
   this->serial_->begin(this->baud_rate_, get_config());
 }
 
+#ifdef USE_UART_TX_BREAK
+bool LibreTinyUARTComponent::set_tx_break(bool enable) {
+  if (this->tx_pin_ == nullptr || this->serial_ == nullptr || this->is_failed())
+    return false;
+  if (this->hardware_idx_ < 0) {
+    // software serial drives the pin as a GPIO
+    this->tx_pin_->digital_write(!enable);
+    return true;
+  }
+  if (enable) {
+    // the Arduino API has no break: the port is closed and the pin driven as a GPIO
+    this->serial_->end();
+    this->tx_pin_->setup();
+    this->tx_pin_->digital_write(false);
+    return true;
+  }
+  this->tx_pin_->digital_write(true);
+  this->serial_->begin(this->baud_rate_, this->get_config());
+  return true;
+}
+#endif
+
 void LibreTinyUARTComponent::dump_config() {
   bool is_software = this->hardware_idx_ == -1;
   ESP_LOGCONFIG(TAG,

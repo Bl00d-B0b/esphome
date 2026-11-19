@@ -572,6 +572,11 @@ async def uart_write_to_code(config, action_id, template_arg, args):
     return var
 
 
+def request_tx_break() -> None:
+    """Compile in UARTComponent::set_tx_break() for a component that holds the TX line low."""
+    cg.add_define("USE_UART_TX_BREAK")
+
+
 @coroutine_with_priority(CoroPriority.FINAL)
 async def final_step():
     """Final code generation step to configure optional UART features."""

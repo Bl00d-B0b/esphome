@@ -30,7 +30,9 @@ CONF_WEATHER = "weather"
 CONF_ON_WEATHER_REQUEST = "on_weather_request"
 CONF_DATAPOINT_ACK = "datapoint_ack"
 
+CONF_RESET_TIME = "reset_time"
 ACTION_REBOOT = "reboot"
+ACTION_RESET = "reset"
 ACTION_DISABLE = "disable"
 
 tuya_ns = cg.esphome_ns.namespace("tuya")
@@ -230,13 +232,25 @@ def _validate_heartbeat(config: ConfigType) -> ConfigType:
 
 CONF_TUYA_ID = "tuya_id"
 
+_MISSED_HEARTBEATS_SCHEMA = cv.Schema(
+    {
+        cv.Optional(CONF_MISSED_HEARTBEATS, default=6): cv.int_range(min=1, max=20),
+    }
+)
+
 # the options of each action: one without effect is rejected
 MCU_WATCHDOG_SCHEMA = cv.typed_schema(
     {
-        ACTION_REBOOT: cv.Schema(
+        ACTION_REBOOT: _MISSED_HEARTBEATS_SCHEMA,
+        # holds TX low for reset_time, which restarts the MCU's UART
+        ACTION_RESET: _MISSED_HEARTBEATS_SCHEMA.extend(
             {
-                cv.Optional(CONF_MISSED_HEARTBEATS, default=6): cv.int_range(
-                    min=1, max=20
+                cv.Optional(CONF_RESET_TIME, default="500ms"): cv.All(
+                    cv.positive_time_period_milliseconds,
+                    cv.Range(
+                        min=cv.TimePeriod(milliseconds=50),
+                        max=cv.TimePeriod(seconds=5),
+                    ),
                 ),
             }
         ),
@@ -323,6 +337,12 @@ async def to_code(config):
     if config[CONF_HEARTBEAT] and watchdog[CONF_ACTION] != ACTION_DISABLE:
         cg.add_define("USE_TUYA_MCU_WATCHDOG")
         cg.add(var.set_mcu_watchdog(watchdog[CONF_MISSED_HEARTBEATS]))
+        if watchdog[CONF_ACTION] == ACTION_RESET:
+            cg.add_define("USE_TUYA_MCU_WATCHDOG_RESET")
+            uart.request_tx_break()
+            cg.add(
+                var.set_mcu_watchdog_reset(watchdog[CONF_RESET_TIME].total_milliseconds)
+            )
     if CONF_IGNORE_MCU_UPDATE_ON_DATAPOINTS in config:
         for dp in config[CONF_IGNORE_MCU_UPDATE_ON_DATAPOINTS]:
             cg.add(var.add_ignore_mcu_update_on_datapoints(dp))
