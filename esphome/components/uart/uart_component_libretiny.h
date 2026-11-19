@@ -29,6 +29,10 @@ class LibreTinyUARTComponent final : public UARTComponent, public Component {
   HardwareSerial *get_hw_serial() { return this->serial_; }
   int8_t get_hw_serial_number() { return this->hardware_idx_; }
 
+#ifdef USE_UART_TX_BREAK
+  bool set_tx_break(bool enable) override;
+#endif
+
  protected:
   void check_logger_conflict() override;
 

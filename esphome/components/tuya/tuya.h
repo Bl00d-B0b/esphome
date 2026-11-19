@@ -167,6 +167,12 @@ class Tuya final : public Component, public uart::UARTDevice {
 #ifdef USE_TUYA_MCU_WATCHDOG
   void set_mcu_watchdog(uint8_t missed_heartbeats) { this->watchdog_missed_heartbeats_ = missed_heartbeats; }
 #endif
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+  /// Time TX is held low to reset the MCU instead of a reboot.
+  void set_mcu_watchdog_reset(uint32_t reset_time) { this->watchdog_reset_time_ = reset_time; }
+  /// Number of MCU resets since boot.
+  uint32_t get_mcu_resets() const { return this->mcu_resets_; }
+#endif
 
 #ifdef USE_TUYA_WEATHER
   /// Interval of unrequested weather frames while the MCU has the service enabled, 0 = none.
@@ -236,6 +242,15 @@ class Tuya final : public Component, public uart::UARTDevice {
   uint8_t heartbeat_answers_{0};
 #else
   bool heartbeat_missed_{false};  // unanswered heartbeat logged, until the next reply
+#endif
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+  void start_tx_break_();
+  void end_tx_break_();
+  uint32_t watchdog_reset_time_{0};  // 0 = reboot
+  uint32_t tx_break_start_{0};
+  uint32_t mcu_resets_{0};
+  bool tx_break_active_{false};
+  bool tx_break_unconfirmed_{false};  // no heartbeat reply since the last reset
 #endif
 #ifdef USE_TIME
   void register_local_time_sync_callback_();
