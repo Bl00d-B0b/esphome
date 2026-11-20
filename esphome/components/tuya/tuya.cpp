@@ -77,7 +77,7 @@ void Tuya::setup() {
 void Tuya::loop() {
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
   if (this->tx_break_active_) {
-    if (millis() - this->tx_break_start_ < this->watchdog_reset_time_)
+    if (App.get_loop_component_start_time() - this->tx_break_start_ < this->watchdog_reset_time_)
       return;
     this->end_tx_break_();
   }
@@ -567,6 +567,20 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
 }
 
 void Tuya::handle_datapoints_(const uint8_t *buffer, size_t len, bool ack) {
+  if (ack) {
+    // own pass: a datapoint that cannot be parsed ends the parsing below, the ones after it are acknowledged too
+    const uint8_t *entry = buffer;
+    size_t rest = len;
+    while (rest >= 4) {
+      this->send_command_(
+          TuyaCommand{.cmd = TuyaCommandType::DATAPOINT_REPORT_ASYNC, .payload = std::vector<uint8_t>{entry[0], 0x00}});
+      const size_t entry_size = 4 + encode_uint16(entry[2], entry[3]);
+      if (entry_size > rest)
+        break;
+      entry += entry_size;
+      rest -= entry_size;
+    }
+  }
   while (len >= 4) {
     TuyaDatapoint datapoint{};
     datapoint.id = buffer[0];
@@ -576,11 +590,6 @@ void Tuya::handle_datapoints_(const uint8_t *buffer, size_t len, bool ack) {
     size_t data_size = encode_uint16(buffer[2], buffer[3]);
     const uint8_t *data = buffer + 4;
     size_t data_len = len - 4;
-    // before the checks below: a datapoint that cannot be parsed is acknowledged too
-    if (ack) {
-      this->send_command_(TuyaCommand{.cmd = TuyaCommandType::DATAPOINT_REPORT_ASYNC,
-                                      .payload = std::vector<uint8_t>{datapoint.id, 0x00}});
-    }
     if (data_size > data_len) {
       ESP_LOGW(TAG, "Datapoint %u is truncated and cannot be parsed (%zu > %zu)", datapoint.id, data_size, data_len);
       return;
@@ -828,13 +837,25 @@ void Tuya::note_missed_heartbeat_() {
 
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
 void Tuya::start_tx_break_() {
-  this->flush();
+  const uart::UARTFlushResult flushed = this->flush();
+  if (flushed == uart::UARTFlushResult::UART_FLUSH_RESULT_TIMEOUT ||
+      flushed == uart::UARTFlushResult::UART_FLUSH_RESULT_FAILED) {
+    // a break would cut into the bytes still sent; the next misses try again
+    ESP_LOGW(TAG, "UART bus did not finish sending, MCU reset skipped");
+    return;
+  }
   if (!this->parent_->set_tx_break(true)) {
+    // as with action: reboot, no reboot before the working mode reply
+    if (!this->working_mode_received_) {
+      ESP_LOGE(TAG, "UART bus cannot hold TX low");
+      return;
+    }
     ESP_LOGE(TAG, "UART bus cannot hold TX low, rebooting");
     App.safe_reboot();
     return;
   }
-  this->tx_break_start_ = millis();
+  // the clock of loop(), which ends the break
+  this->tx_break_start_ = App.get_loop_component_start_time();
   this->tx_break_active_ = true;
   this->tx_break_unconfirmed_ = true;
   this->mcu_resets_++;
@@ -850,6 +871,8 @@ void Tuya::end_tx_break_() {
     App.safe_reboot();
     return;
   }
+  // bytes received during the break are not replies to anything sent after it
+  this->discard_available();
   this->rx_message_.clear();
   this->send_empty_command_(TuyaCommandType::DATAPOINT_QUERY);
 }
