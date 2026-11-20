@@ -30,6 +30,10 @@ static constexpr uint32_t RX_FRAME_TIMEOUT = 400;
 // Max bytes to log for datapoint values (larger values are truncated)
 static constexpr size_t MAX_DATAPOINT_LOG_BYTES = 16;
 static constexpr uint32_t FORCE_TIME_SYNC_CHECK_INTERVAL = 1000;
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+// action: reset reboots the module when this many resets in a row brought no heartbeat answer
+static constexpr uint8_t MAX_UNANSWERED_RESETS = 3;
+#endif
 
 // Command whose missing reply fails an init step. INIT_WIFI has no query of its own, the heartbeat stands in.
 static TuyaCommandType init_step_query(TuyaInitState state) {
@@ -292,11 +296,18 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
     this->command_queue_.erase(command_queue_.begin());
     this->resent_ = false;
 #ifdef USE_TUYA_MCU_WATCHDOG
-    // an MCU that answers only now and then stays counted
-    if (command_type == TuyaCommandType::HEARTBEAT && this->heartbeat_answers_ < this->watchdog_missed_heartbeats_) {
-      this->heartbeat_answers_++;
-      if (this->heartbeat_answers_ == this->watchdog_missed_heartbeats_)
-        this->heartbeat_misses_ = 0;
+    // an answer in time takes one miss off: an MCU that skips a heartbeat now and then is not counted out,
+    // one that answers less than half of them is
+    if (command_type == TuyaCommandType::HEARTBEAT && this->heartbeat_misses_ != 0)
+      this->heartbeat_misses_--;
+#endif
+#ifdef USE_TUYA_MCU_WATCHDOG_RESET
+    // only an answer in time: a stalled MCU answers late
+    if (command_type == TuyaCommandType::HEARTBEAT && this->tx_break_unconfirmed_) {
+      this->tx_break_unconfirmed_ = false;
+      this->tx_break_failures_ = 0;
+      this->status_clear_warning();
+      ESP_LOGI(TAG, "MCU answers heartbeats again after the reset");
     }
 #endif
   }
@@ -307,13 +318,6 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
       this->protocol_version_ = version;
 #ifndef USE_TUYA_MCU_WATCHDOG
       this->heartbeat_missed_ = false;
-#endif
-#ifdef USE_TUYA_MCU_WATCHDOG_RESET
-      if (this->tx_break_unconfirmed_) {
-        this->tx_break_unconfirmed_ = false;
-        this->status_clear_warning();
-        ESP_LOGI(TAG, "MCU answers heartbeats again after the reset");
-      }
 #endif
       if (buffer[0] == 0) {
         ESP_LOGI(TAG, "MCU restarted");
@@ -378,7 +382,6 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
 #ifdef USE_TUYA_MCU_WATCHDOG
         // the reboot is armed here: misses from before do not count towards it
         this->heartbeat_misses_ = 0;
-        this->heartbeat_answers_ = 0;
 #endif
       }
       if (this->init_state_ == TuyaInitState::INIT_CONF) {
@@ -697,12 +700,14 @@ void Tuya::send_raw_command_(TuyaCommand command) {
   uint8_t version = 0;
 
   this->last_command_timestamp_ = millis();
+#ifdef USE_TUYA_WEATHER
   // a reply cannot come before the frame has left: header, payload and checksum at the settings of the bus
   uint32_t baud_rate = this->parent_->get_baud_rate();
   uint32_t frame_bits = static_cast<uint32_t>(7 + command.payload.size()) *
                         (1 + this->parent_->get_data_bits() + this->parent_->get_stop_bits() +
                          (this->parent_->get_parity() != uart::UART_CONFIG_PARITY_NONE ? 1 : 0));
   this->command_tx_time_ = baud_rate == 0 ? 0 : frame_bits * 1000 / baud_rate;
+#endif
   switch (command.cmd) {
     case TuyaCommandType::HEARTBEAT:
       this->expected_response_ = TuyaCommandType::HEARTBEAT;
@@ -750,7 +755,13 @@ void Tuya::process_command_queue_() {
     this->rx_message_.clear();
   }
 
-  if (this->expected_response_.has_value() && delay > RESPONSE_TIMEOUT + this->command_tx_time_) {
+#ifdef USE_TUYA_WEATHER
+  // a weather frame can take longer on the wire than the reply timeout
+  const uint32_t reply_timeout = RESPONSE_TIMEOUT + this->command_tx_time_;
+#else
+  const uint32_t reply_timeout = RESPONSE_TIMEOUT;
+#endif
+  if (this->expected_response_.has_value() && delay > reply_timeout) {
     this->expected_response_.reset();
     if (!this->resent_) {
       // stays at the front of the queue and is sent once more
@@ -809,13 +820,21 @@ void Tuya::process_command_queue_() {
 
 #ifdef USE_TUYA_MCU_WATCHDOG
 void Tuya::note_missed_heartbeat_() {
-  this->heartbeat_answers_ = 0;
   if (this->watchdog_missed_heartbeats_ == 0 || ++this->heartbeat_misses_ < this->watchdog_missed_heartbeats_)
     return;
   this->heartbeat_misses_ = 0;
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
   if (this->watchdog_reset_time_ != 0) {
     if (this->tx_break_unconfirmed_) {
+      // resets that do not bring the MCU back end in a reboot, under the rule of action: reboot
+      if (this->tx_break_failures_ < MAX_UNANSWERED_RESETS)
+        this->tx_break_failures_++;
+      if (this->tx_break_failures_ == MAX_UNANSWERED_RESETS && this->working_mode_received_) {
+        ESP_LOGE(TAG, "MCU left %u heartbeats unanswered after %u resets, rebooting", this->watchdog_missed_heartbeats_,
+                 MAX_UNANSWERED_RESETS);
+        App.safe_reboot();
+        return;
+      }
       ESP_LOGE(TAG, "MCU left %u heartbeats unanswered after a reset, holding TX low again",
                this->watchdog_missed_heartbeats_);
     } else {
@@ -854,8 +873,8 @@ void Tuya::start_tx_break_() {
     App.safe_reboot();
     return;
   }
-  // the clock of loop(), which ends the break
-  this->tx_break_start_ = App.get_loop_component_start_time();
+  // not the time of this loop pass: the flush above took a part of it and the break would end early
+  this->tx_break_start_ = millis();
   this->tx_break_active_ = true;
   this->tx_break_unconfirmed_ = true;
   this->mcu_resets_++;

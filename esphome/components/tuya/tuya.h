@@ -238,8 +238,7 @@ class Tuya final : public Component, public uart::UARTDevice {
 #ifdef USE_TUYA_MCU_WATCHDOG
   void note_missed_heartbeat_();
   uint8_t watchdog_missed_heartbeats_{0};
-  uint8_t heartbeat_misses_{0};
-  uint8_t heartbeat_answers_{0};
+  uint8_t heartbeat_misses_{0};  // unanswered heartbeats less the answered ones since
 #else
   bool heartbeat_missed_{false};  // unanswered heartbeat logged, until the next reply
 #endif
@@ -250,7 +249,8 @@ class Tuya final : public Component, public uart::UARTDevice {
   uint32_t tx_break_start_{0};
   uint32_t mcu_resets_{0};
   bool tx_break_active_{false};
-  bool tx_break_unconfirmed_{false};  // no heartbeat reply since the last reset
+  bool tx_break_unconfirmed_{false};  // no heartbeat answered in time since the last reset
+  uint8_t tx_break_failures_{0};      // resets in a row that brought no such answer
 #endif
 #ifdef USE_TIME
   void register_local_time_sync_callback_();
@@ -274,7 +274,9 @@ class Tuya final : public Component, public uart::UARTDevice {
   int reset_pin_reported_ = -1;
   uint32_t last_command_timestamp_ = 0;
   uint32_t last_rx_char_timestamp_ = 0;
+#ifdef USE_TUYA_WEATHER
   uint32_t command_tx_time_ = 0;  // time on the wire of the last command sent
+#endif
   std::unique_ptr<char[]> product_;
   std::vector<TuyaDatapointListener> listeners_;
   std::vector<TuyaDatapoint> datapoints_;
@@ -311,6 +313,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   void queue_weather_frame_(std::vector<uint8_t> &&payload, TuyaWeatherFrame kind);
   bool weather_answer_queued_() const;
   bool weather_key_requested_(const std::string &key) const;
+  uint8_t configured_weather_days_() const;
   uint32_t weather_update_interval_ = 0;  // 0 = only on the MCU's requests
   bool weather_enabled_ = false;          // MCU sent 0x20 (or 0x34/0x03)
   bool collecting_weather_ = false;       // inside collect_weather_: send_weather() collects into pending_weather_
@@ -322,7 +325,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   bool weather_in_flight_ = false;                // the first of them is written and waits for its ack
   bool skip_weather_retry_ = false;               // the retry timer has not run yet
   bool skip_weather_update_ = false;              // the update_interval timer has not run yet
-  bool weather_update_empty_ = false;             // the last update_interval tick found no value, warned once
+  bool weather_update_empty_ = false;             // the last tick or request found no value, warned once
   uint8_t weather_retries_ = 0;                   // tries since the last acknowledged answer
   uint32_t last_weather_sent_ = 0;                // last answer the MCU acknowledged
   uint32_t last_weather_demand_ = 0;              // last acknowledged answer that counts against the 20 min limit

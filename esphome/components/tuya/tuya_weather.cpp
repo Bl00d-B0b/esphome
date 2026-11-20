@@ -25,7 +25,9 @@ static constexpr size_t WEATHER_MAX_PAYLOAD = 1024;
 // Tuya's MCU SDK copies a string value into a 100 byte buffer
 static constexpr size_t WEATHER_MAX_STRING = 99;
 // Requested keys in the debug line
-static constexpr size_t WEATHER_KEY_LOG_SIZE = 128;
+static constexpr size_t WEATHER_KEY_LOG_SIZE = 256;
+// Keys of one enable request; Tuya's MCU SDK knows fewer than 30
+static constexpr size_t WEATHER_MAX_KEYS = 64;
 
 // w.<key>.<day>, day 0 = today
 static bool weather_key_has_day(const std::string &key) {
@@ -88,7 +90,7 @@ void Tuya::handle_weather_enable_(const uint8_t *buffer, size_t len) {
   size_t i = 0;
   while (i < len) {
     size_t key_len = buffer[i];
-    if (key_len == 0 || i + 1 + key_len > len) {
+    if (key_len == 0 || i + 1 + key_len > len || keys.size() == WEATHER_MAX_KEYS) {
       ESP_LOGW(TAG, "Weather enable request malformed at byte %u", (unsigned) i);
       // the key list of an earlier request no longer holds
       this->reset_weather_();
@@ -175,7 +177,10 @@ void Tuya::handle_weather_request_() {
   bool failed = false;
   if (!answered && !refused) {
     if (!this->weather_enabled_) {
+      // the MCU sends its key list once per start of its own: after a restart of the module alone
+      // every configured key is sent, as a forecast when forecast keys are configured
       this->weather_enabled_ = true;
+      this->weather_forecast_days_ = this->configured_weather_days_();
       this->start_weather_interval_();
     }
     failed = !this->collect_weather_(payload);
@@ -193,13 +198,18 @@ void Tuya::handle_weather_request_() {
   if (failed) {
     if (this->init_state_ != TuyaInitState::INIT_DONE) {
       ESP_LOGW(TAG, "MCU asked for weather data before it is initialised, not sent");
-    } else {
+    } else if (!this->weather_update_empty_) {
+      // once per streak, the MCU asks again and again
+      this->weather_update_empty_ = true;
       ESP_LOGW(TAG, "MCU asked for weather data, nothing to send");
+    } else {
+      ESP_LOGD(TAG, "MCU asked for weather data, nothing to send");
     }
     return;
   }
   if (answered)
     return;
+  this->weather_update_empty_ = false;
   this->weather_retries_ = 0;
   // only a complete answer counts against the 20 min limit, and only once the MCU acknowledged it
   this->queue_weather_frame_(std::move(payload),
@@ -237,6 +247,26 @@ void Tuya::update_weather_() {
   }
 }
 
+// Forecast days of the configured sources: highest day of a w.<key>.<day> key plus one, 0 without such a key.
+uint8_t Tuya::configured_weather_days_() const {
+  uint8_t days = 0;
+  auto note = [&days](const char *key) {
+    const size_t n = strlen(key);
+    if (n >= 3 && key[n - 2] == '.' && key[n - 1] >= '0' && key[n - 1] <= '6')
+      days = std::max<uint8_t>(days, key[n - 1] - '0' + 1);
+  };
+#ifdef USE_SENSOR
+  for (const auto &src : this->weather_sensors_)
+    note(src.first);
+#endif
+#ifdef USE_TEXT_SENSOR
+  for (const auto &src : this->weather_text_sensors_)
+    note(src.first);
+#endif
+  (void) note;
+  return days;
+}
+
 // A collected answer is queued or waits for its ack; frames of send_weather() calls outside a request do not count.
 bool Tuya::weather_answer_queued_() const {
   for (TuyaWeatherFrame kind : this->weather_frames_) {
@@ -272,7 +302,9 @@ bool Tuya::request_weather_() {
 void Tuya::queue_weather_frame_(std::vector<uint8_t> &&payload, TuyaWeatherFrame kind) {
   // before the command: it may be written at once
   this->weather_frames_.push_back(kind);
-  this->cancel_interval(WEATHER_RETRY_INTERVAL_ID);
+  // values of a send_weather() call do not answer the request the retry is for
+  if (kind != TuyaWeatherFrame::VALUES)
+    this->cancel_interval(WEATHER_RETRY_INTERVAL_ID);
   this->send_command_(TuyaCommand{.cmd = TuyaCommandType::WEATHER_DATA, .payload = std::move(payload)});
 }
 
@@ -322,17 +354,21 @@ bool Tuya::collect_weather_(std::vector<uint8_t> &payload) {
     return false;
   }
 #if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG
-  // a list that does not fit is cut
+  // a list that does not fit is cut at a whole key and marked
   char list[WEATHER_KEY_LOG_SIZE];
   size_t used = 0;
+  bool cut = false;
   list[0] = '\0';
   for (const auto &key : this->weather_keys_) {
     int n = snprintf(list + used, sizeof(list) - used, "%s%s", used == 0 ? "" : ", ", key.c_str());
-    if (n < 0 || static_cast<size_t>(n) >= sizeof(list) - used)
+    if (n < 0 || static_cast<size_t>(n) >= sizeof(list) - used) {
+      list[used] = '\0';
+      cut = true;
       break;
+    }
     used += n;
   }
-  ESP_LOGD(TAG, "Weather data requested: %s", list);
+  ESP_LOGD(TAG, "Weather data requested: %s%s", list, cut ? LOG_STR_LITERAL(" ... (list cut)") : LOG_STR_LITERAL(""));
 #endif
   // pending_weather_ keeps its storage from one request to the next
   std::vector<TuyaWeatherValue> &values = this->pending_weather_;

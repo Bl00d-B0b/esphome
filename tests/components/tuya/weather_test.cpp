@@ -409,11 +409,12 @@ TEST_F(TuyaWeatherTest, RetryEndsWithTheFirstFrame) {
   EXPECT_FALSE(this->stop_retry_());
 }
 
-TEST_F(TuyaWeatherTest, SendOutsideARequestEndsTheRetry) {
+// Values of one key do not answer the request for the others
+TEST_F(TuyaWeatherTest, SendOutsideARequestKeepsTheRetry) {
   this->sut_.add_on_weather_request_callback([](const std::vector<std::string> &) {});
-  this->enable_({"w.temp"});
+  this->enable_({"w.temp", "w.humidity"});
   EXPECT_TRUE(this->sut_.send_weather({int_value("w.temp", 21)}));
-  EXPECT_FALSE(this->stop_retry_());
+  EXPECT_TRUE(this->stop_retry_());
 }
 
 // update_interval: no frame when the MCU acknowledged an answer less than half an interval ago
@@ -500,6 +501,33 @@ TEST_F(TuyaWeatherTest, EnableWithAnEmptyKeyIsRefused) {
   EXPECT_EQ(this->sent_(WEATHER_ENABLE), (Bytes{0x00, 0x01}));
   EXPECT_FALSE(this->sut_.send_weather({int_value("w.temp", 21)}));
   this->expect_nothing_sent_();
+}
+
+TEST_F(TuyaWeatherTest, EnableWithTooManyKeysIsRefused) {
+  Bytes payload;
+  for (int i = 0; i < 65; i++) {
+    payload.push_back(0x01);
+    payload.push_back('k');
+  }
+  this->mcu_(WEATHER_ENABLE, payload);
+  EXPECT_EQ(this->sent_(WEATHER_ENABLE), (Bytes{0x00, 0x01}));
+  EXPECT_FALSE(this->sut_.send_weather({int_value("k", 21)}));
+  this->expect_nothing_sent_();
+}
+
+// 0x34/0x03 after a restart of the module alone: no key list, configured forecast keys make it a forecast
+TEST_F(TuyaWeatherTest, RequestWithoutEnableSendsConfiguredForecastWithDays) {
+  sensor::Sensor today, tomorrow;
+  this->sut_.init_weather_sources(2, 0);
+  this->sut_.add_weather_sensor("w.temp", &today);
+  this->sut_.add_weather_sensor("w.temp.1", &tomorrow);
+  today.publish_state(21.0f);
+  tomorrow.publish_state(19.0f);
+  EXPECT_EQ(this->request_(), 0x00);
+  Bytes expected{0x01};
+  put_entry(expected, "w.temp.0", 0x00, {0x00, 0x00, 0x00, 0x15});
+  put_entry(expected, "w.temp.1", 0x00, {0x00, 0x00, 0x00, 0x13});
+  EXPECT_EQ(this->weather_frame_(), expected);
 }
 
 TEST_F(TuyaWeatherTest, MalformedEnableTurnsTheServiceOff) {

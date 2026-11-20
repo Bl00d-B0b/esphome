@@ -38,6 +38,9 @@ class LibreTinyUARTComponent final : public UARTComponent, public Component {
 
   HardwareSerial *serial_{nullptr};
   int8_t hardware_idx_{-1};
+#ifdef USE_UART_TX_BREAK
+  bool tx_break_{false};
+#endif
 };
 
 }  // namespace esphome::uart
