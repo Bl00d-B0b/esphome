@@ -298,8 +298,11 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
 #ifdef USE_TUYA_MCU_WATCHDOG
     // an answer in time takes one miss off: an MCU that skips a heartbeat now and then is not counted out,
     // one that answers less than half of them is
-    if (command_type == TuyaCommandType::HEARTBEAT && this->heartbeat_misses_ != 0)
-      this->heartbeat_misses_--;
+    if (command_type == TuyaCommandType::HEARTBEAT) {
+      this->unarmed_misses_logged_ = false;
+      if (this->heartbeat_misses_ != 0)
+        this->heartbeat_misses_--;
+    }
 #endif
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
     // only an answer in time: a stalled MCU answers late
@@ -575,11 +578,12 @@ void Tuya::handle_datapoints_(const uint8_t *buffer, size_t len, bool ack) {
     const uint8_t *entry = buffer;
     size_t rest = len;
     while (rest >= 4) {
-      this->send_command_(
-          TuyaCommand{.cmd = TuyaCommandType::DATAPOINT_REPORT_ASYNC, .payload = std::vector<uint8_t>{entry[0], 0x00}});
       const size_t entry_size = 4 + encode_uint16(entry[2], entry[3]);
+      // a datapoint cut off by the end of the frame is not acknowledged
       if (entry_size > rest)
         break;
+      this->send_command_(
+          TuyaCommand{.cmd = TuyaCommandType::DATAPOINT_REPORT_ASYNC, .payload = std::vector<uint8_t>{entry[0], 0x00}});
       entry += entry_size;
       rest -= entry_size;
     }
@@ -846,8 +850,12 @@ void Tuya::note_missed_heartbeat_() {
 #endif
   // Tuya's module firmware does not reset itself before the working mode reply
   if (!this->working_mode_received_) {
-    ESP_LOGW(TAG, "MCU left %u heartbeats unanswered before the working mode reply, not rebooting",
-             this->watchdog_missed_heartbeats_);
+    // once until the next answered heartbeat: an MCU that is not there would repeat it without end
+    if (!this->unarmed_misses_logged_) {
+      this->unarmed_misses_logged_ = true;
+      ESP_LOGW(TAG, "MCU left %u heartbeats unanswered before the working mode reply, not rebooting",
+               this->watchdog_missed_heartbeats_);
+    }
     return;
   }
   ESP_LOGE(TAG, "MCU left %u heartbeats unanswered, rebooting", this->watchdog_missed_heartbeats_);

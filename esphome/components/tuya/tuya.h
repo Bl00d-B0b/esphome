@@ -238,7 +238,8 @@ class Tuya final : public Component, public uart::UARTDevice {
 #ifdef USE_TUYA_MCU_WATCHDOG
   void note_missed_heartbeat_();
   uint8_t watchdog_missed_heartbeats_{0};
-  uint8_t heartbeat_misses_{0};  // unanswered heartbeats less the answered ones since
+  uint8_t heartbeat_misses_{0};        // unanswered heartbeats less the answered ones since
+  bool unarmed_misses_logged_{false};  // count reached before the working mode reply, logged once
 #else
   bool heartbeat_missed_{false};  // unanswered heartbeat logged, until the next reply
 #endif
