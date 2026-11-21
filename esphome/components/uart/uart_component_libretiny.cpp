@@ -131,11 +131,9 @@ void LibreTinyUARTComponent::setup() {
 bool LibreTinyUARTComponent::set_tx_break(bool enable) {
   if (this->tx_pin_ == nullptr || this->serial_ == nullptr || this->is_failed())
     return false;
-  if (this->hardware_idx_ < 0) {
-    // software serial drives the pin as a GPIO
-    this->tx_pin_->digital_write(!enable);
-    return true;
-  }
+  // software serial sends from a timer and its flush() does not wait for TX: the pin cannot be held
+  if (this->hardware_idx_ < 0)
+    return false;
   // a hardware port does not invert its TX signal, the pin level would be the idle level
   if (this->tx_pin_->is_inverted())
     return false;

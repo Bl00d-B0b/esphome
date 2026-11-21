@@ -123,7 +123,8 @@ class UARTComponent {
 
 #ifdef USE_UART_TX_BREAK
   // Holds the TX line at the level opposite to idle (low for a pin that is not inverted) until released.
-  // Nothing may be written while it is held. Compiled in with uart.request_tx_break() in codegen.
+  // flush() before it; no read or write on the bus meanwhile: a LibreTiny hardware port is closed for it and
+  // loses its RX buffer. load_settings() applies a held break again. Needs uart.request_tx_break() in codegen.
   // @return false when the bus has no TX pin of the microcontroller to drive.
   virtual bool set_tx_break(bool enable) { return false; }
 #endif
