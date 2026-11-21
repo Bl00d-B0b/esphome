@@ -294,25 +294,30 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
   if (this->expected_response_.has_value() && this->expected_response_ == reply_type) {
     this->expected_response_.reset();
     this->command_queue_.erase(command_queue_.begin());
-    this->resent_ = false;
 #ifdef USE_TUYA_MCU_WATCHDOG
-    // an answer in time takes one miss off: an MCU that skips a heartbeat now and then is not counted out,
-    // one that answers less than half of them is
+    // two heartbeats in a row answered at the first send take one miss off: an MCU that skips one now and then
+    // is not counted out. A stalled MCU answers late: an answer to the second send takes none off and ends the row
     if (command_type == TuyaCommandType::HEARTBEAT) {
       this->unarmed_misses_logged_ = false;
-      if (this->heartbeat_misses_ != 0)
-        this->heartbeat_misses_--;
+      if (this->resent_) {
+        this->heartbeat_answers_ = 0;
+      } else if (++this->heartbeat_answers_ == 2) {
+        this->heartbeat_answers_ = 0;
+        if (this->heartbeat_misses_ != 0)
+          this->heartbeat_misses_--;
+      }
     }
 #endif
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
-    // only an answer in time: a stalled MCU answers late
-    if (command_type == TuyaCommandType::HEARTBEAT && this->tx_break_unconfirmed_) {
+    // only an answer to the first send: a stalled MCU answers late
+    if (command_type == TuyaCommandType::HEARTBEAT && !this->resent_ && this->tx_break_unconfirmed_) {
       this->tx_break_unconfirmed_ = false;
       this->tx_break_failures_ = 0;
       this->status_clear_warning();
       ESP_LOGI(TAG, "MCU answers heartbeats again after the reset");
     }
 #endif
+    this->resent_ = false;
   }
 
   switch (command_type) {
@@ -385,6 +390,7 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
 #ifdef USE_TUYA_MCU_WATCHDOG
         // the reboot is armed here: misses from before do not count towards it
         this->heartbeat_misses_ = 0;
+        this->heartbeat_answers_ = 0;
 #endif
       }
       if (this->init_state_ == TuyaInitState::INIT_CONF) {
@@ -824,6 +830,7 @@ void Tuya::process_command_queue_() {
 
 #ifdef USE_TUYA_MCU_WATCHDOG
 void Tuya::note_missed_heartbeat_() {
+  this->heartbeat_answers_ = 0;
   if (this->watchdog_missed_heartbeats_ == 0 || ++this->heartbeat_misses_ < this->watchdog_missed_heartbeats_)
     return;
   this->heartbeat_misses_ = 0;
