@@ -81,7 +81,9 @@ void Tuya::setup() {
 void Tuya::loop() {
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
   if (this->tx_break_active_) {
-    if (App.get_loop_component_start_time() - this->tx_break_start_ < this->watchdog_reset_time_)
+    // signed: the break starts at millis(), which can be later than the time of this loop pass
+    if (static_cast<int32_t>(App.get_loop_component_start_time() - this->tx_break_start_) <
+        static_cast<int32_t>(this->watchdog_reset_time_))
       return;
     this->end_tx_break_();
   }
@@ -310,11 +312,15 @@ void Tuya::handle_command_(uint8_t command, uint8_t version, const uint8_t *buff
 #endif
 #ifdef USE_TUYA_MCU_WATCHDOG_RESET
     // only an answer to the first send: a stalled MCU answers late
-    if (command_type == TuyaCommandType::HEARTBEAT && !this->resent_ && this->tx_break_unconfirmed_) {
+    if (command_type == TuyaCommandType::HEARTBEAT && !this->resent_ &&
+        (this->tx_break_unconfirmed_ || this->tx_break_failures_ != 0)) {
+      // without a reset before it, the answer ends a run of skipped resets
+      if (this->tx_break_unconfirmed_) {
+        ESP_LOGI(TAG, "MCU answers heartbeats again after the reset");
+      }
       this->tx_break_unconfirmed_ = false;
       this->tx_break_failures_ = 0;
       this->status_clear_warning();
-      ESP_LOGI(TAG, "MCU answers heartbeats again after the reset");
     }
 #endif
     this->resent_ = false;
@@ -874,8 +880,17 @@ void Tuya::start_tx_break_() {
   const uart::UARTFlushResult flushed = this->flush();
   if (flushed == uart::UARTFlushResult::UART_FLUSH_RESULT_TIMEOUT ||
       flushed == uart::UARTFlushResult::UART_FLUSH_RESULT_FAILED) {
-    // a break would cut into the bytes still sent; the next misses try again
+    // a break would cut into the bytes still sent; the next misses try again.
+    // After an unconfirmed reset the caller has counted this run already.
+    if (!this->tx_break_unconfirmed_ && this->tx_break_failures_ < MAX_UNANSWERED_RESETS)
+      this->tx_break_failures_++;
+    if (this->tx_break_failures_ == MAX_UNANSWERED_RESETS && this->working_mode_received_) {
+      ESP_LOGE(TAG, "UART bus did not finish sending, MCU reset skipped %u times, rebooting", MAX_UNANSWERED_RESETS);
+      App.safe_reboot();
+      return;
+    }
     ESP_LOGW(TAG, "UART bus did not finish sending, MCU reset skipped");
+    this->status_set_warning(LOG_STR("MCU does not answer heartbeats"));
     return;
   }
   if (!this->parent_->set_tx_break(true)) {

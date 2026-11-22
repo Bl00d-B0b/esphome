@@ -148,9 +148,9 @@ bool LibreTinyUARTComponent::set_tx_break(bool enable) {
     return true;
   }
   this->tx_pin_->digital_write(true);
-  // LibreTiny skips a pin mode it has on record and begin() leaves the record alone:
-  // recorded as an output, the pin would not be set up for the next break
-  this->tx_pin_->pin_mode(gpio::FLAG_INPUT | gpio::FLAG_PULLUP);
+  // The GPIO driver gives the pin back: RTL8720C begin() cannot take a pin it still holds,
+  // and LibreTiny would skip the setup of the next break for a pin on record as an output
+  pinModeRemove(this->tx_pin_->get_pin(), PIN_GPIO);
   // end() on LN882x clears the SDK handle of the port
   libretiny::ensure_serial_handle(this->hardware_idx_);
   this->serial_->begin(this->baud_rate_, this->get_config());
