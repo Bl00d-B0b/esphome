@@ -847,8 +847,7 @@ void Tuya::note_missed_heartbeat_() {
       if (this->tx_break_failures_ < MAX_UNANSWERED_RESETS)
         this->tx_break_failures_++;
       if (this->tx_break_failures_ == MAX_UNANSWERED_RESETS && this->working_mode_received_) {
-        ESP_LOGE(TAG, "MCU left %u heartbeats unanswered after %u resets, rebooting", this->watchdog_missed_heartbeats_,
-                 MAX_UNANSWERED_RESETS);
+        ESP_LOGE(TAG, "MCU did not answer after %u reset attempts in a row, rebooting", MAX_UNANSWERED_RESETS);
         App.safe_reboot();
         return;
       }
@@ -885,7 +884,7 @@ void Tuya::start_tx_break_() {
     if (!this->tx_break_unconfirmed_ && this->tx_break_failures_ < MAX_UNANSWERED_RESETS)
       this->tx_break_failures_++;
     if (this->tx_break_failures_ == MAX_UNANSWERED_RESETS && this->working_mode_received_) {
-      ESP_LOGE(TAG, "UART bus did not finish sending, MCU reset skipped %u times, rebooting", MAX_UNANSWERED_RESETS);
+      ESP_LOGE(TAG, "MCU did not answer after %u reset attempts in a row, rebooting", MAX_UNANSWERED_RESETS);
       App.safe_reboot();
       return;
     }
@@ -897,6 +896,7 @@ void Tuya::start_tx_break_() {
     // as with action: reboot, no reboot before the working mode reply
     if (!this->working_mode_received_) {
       ESP_LOGE(TAG, "UART bus cannot hold TX low");
+      this->status_set_warning(LOG_STR("MCU does not answer heartbeats"));
       return;
     }
     ESP_LOGE(TAG, "UART bus cannot hold TX low, rebooting");

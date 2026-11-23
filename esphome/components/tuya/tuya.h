@@ -252,7 +252,7 @@ class Tuya final : public Component, public uart::UARTDevice {
   uint32_t mcu_resets_{0};
   bool tx_break_active_{false};
   bool tx_break_unconfirmed_{false};  // no heartbeat answered in time since the last reset
-  uint8_t tx_break_failures_{0};      // resets in a row that brought no such answer
+  uint8_t tx_break_failures_{0};      // resets in a row, skipped ones included, without such an answer
 #endif
 #ifdef USE_TIME
   void register_local_time_sync_callback_();
